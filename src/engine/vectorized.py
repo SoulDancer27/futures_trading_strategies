@@ -14,22 +14,22 @@ class VectorizedEngine:
         initial_capital: float = 100_000.0,
         point_value: float = 1.0,               # $ per point (1.0 for stocks/spot, 50 for ES, etc.)
         commission_per_contract: Optional[float] = None,  # Fixed fee per contract/share
-        commission_pct: Optional[float] = None,           # % of trade value (0.001 = 0.1%)
-        slippage_pct: Optional[float] = None              # % slippage of trade value
+        commission_rate: Optional[float] = None,           # Decimal rate (0.001 = 0.1%)
+        slippage_rate: Optional[float] = None              # Decimal rate (0.0005 = 0.05%)
     ):
         self.initial_capital = initial_capital
         self.point_value = point_value
         
         # Validate commission modes (mutually exclusive)
-        if commission_per_contract is not None and commission_pct is not None:
+        if commission_per_contract is not None and commission_rate is not None:
             raise ValueError("Use either commission_per_contract OR commission_pct, not both")
             
         self.commission_per_contract = commission_per_contract
-        self.commission_pct = commission_pct
-        self.slippage_pct = slippage_pct
+        self.commission_rate = commission_rate
+        self.slippage_rate = slippage_rate
         
         # Default to zero fixed commission if neither specified
-        if self.commission_per_contract is None and self.commission_pct is None:
+        if self.commission_per_contract is None and self.commission_rate is None:
             self.commission_per_contract = 0.0
 
     def run(self, strategy: BaseStrategy, data: pd.DataFrame, 
@@ -58,15 +58,15 @@ class VectorizedEngine:
         turnover = pos.diff().abs().fillna(0)  # Contracts traded each bar
         
         # Commission
-        if self.commission_pct is not None:
-            commission_cost = turnover * data["close"] * self.commission_pct * self.point_value
+        if self.commission_rate is not None:
+            commission_cost = turnover * data["close"] * self.commission_rate * self.point_value
         else:
             commission_cost = turnover * (self.commission_per_contract or 0)
             
-        # Slippage (modeled as % of trade value)
+        # Slippage
         slippage_cost = 0.0
-        if self.slippage_pct is not None:
-            slippage_cost = turnover * data["close"] * self.slippage_pct * self.point_value
+        if self.slippage_rate is not None:
+            slippage_cost = turnover * data["close"] * self.slippage_rate * self.point_value
             
         total_costs = commission_cost + slippage_cost
         
