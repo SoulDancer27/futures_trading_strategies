@@ -40,7 +40,8 @@ class FixedRiskPositionStrategy(BaseStrategy):
         expected_worst_return: float = 0.10,   # Expected worst return (10%)
         expected_sharpe: float = 0.5,          # Expected Sharpe ratio for Half Kelly
         min_contracts: int = 0,                # Minimum position size
-        max_contracts: Optional[int] = None    # Maximum position size (None = unlimited)
+        max_contracts: Optional[int] = None,    # Maximum position size (None = unlimited)
+        max_leverage: Optional[float] = None  # Max notional/capital ratio (e.g., 2.0 = 2x)
     ):
         """
         Initialize strategy with risk parameters.
@@ -70,6 +71,7 @@ class FixedRiskPositionStrategy(BaseStrategy):
         self.expected_sharpe = expected_sharpe
         self.min_contracts = min_contracts
         self.max_contracts = max_contracts
+        self.max_leverage = max_leverage
         
         # Store last calculated position for tracking
         self.last_position = 0.0
@@ -167,6 +169,12 @@ class FixedRiskPositionStrategy(BaseStrategy):
         # Position sizing formula (no FX rate - using nominal values)
         denominator = self.multiplier * price * volatility
         n_contracts = (capital * effective_risk) / denominator
+
+        # 🔑 Apply leverage cap if specified
+        if self.max_leverage is not None and self.max_leverage > 0:
+            max_notional = capital * self.max_leverage
+            max_contracts_by_leverage = max_notional / (price * self.multiplier)
+            n_contracts = min(n_contracts, max_contracts_by_leverage)
         
         # Round to nearest whole contract
         n_contracts = round(n_contracts)
