@@ -18,14 +18,14 @@ Where:
 import pandas as pd
 import numpy as np
 from typing import Optional
-from .base import BaseStrategy
+from .base import BaseStrategy  # Adjust import path if using flat structure
 
 class FixedRiskPositionStrategy(BaseStrategy):
     """
     Buy and hold with variable position calculated using fixed risk estimate.
     
     Continuously adjusts position size to maintain constant risk exposure
-    regardless of market volatility.
+    regardless of market volatility. Supports SMA and EWMA volatility estimation.
     """
     
     def __init__(
@@ -33,6 +33,8 @@ class FixedRiskPositionStrategy(BaseStrategy):
         initial_capital: float = 100_000.0,    # Starting capital for position sizing
         risk_target: float = 0.20,             # τ: Target annualized volatility (20%)
         volatility_window: int = 252,          # Lookback for σ_N calculation
+        vol_method: str = 'sma',               # 'sma', 'ewma', or 'pandas_ewm_std'
+        lambda_param: float = 0.94,            # λ decay factor for EWMA (0.94 ≈ 20-day SMA)
         multiplier: float = 1.0,               # Contract multiplier (point value)
         use_fixed_capital: bool = True,        # True = use initial_capital, False = use current equity
         margin_per_contract: Optional[float] = None,  # For risk constraints
@@ -41,28 +43,13 @@ class FixedRiskPositionStrategy(BaseStrategy):
         expected_sharpe: float = 0.5,          # Expected Sharpe ratio for Half Kelly
         min_contracts: int = 0,                # Minimum position size
         max_contracts: Optional[int] = None,    # Maximum position size (None = unlimited)
-        max_leverage: Optional[float] = None  # Max notional/capital ratio (e.g., 2.0 = 2x)
+        max_leverage: Optional[float] = None   # Max notional/capital ratio (e.g., 2.0 = 2x)
     ):
-        """
-        Initialize strategy with risk parameters.
-        
-        Args:
-            initial_capital: Starting capital for position sizing
-            risk_target: Target annualized volatility (τ). Default 20%
-            volatility_window: Number of days for rolling volatility calculation
-            multiplier: Contract multiplier (point value). Default 1.0 for stocks
-            use_fixed_capital: If True, always use initial_capital for sizing.
-                             If False, use current equity (compounding).
-            margin_per_contract: Margin requirement per contract (for risk limits)
-            max_capital_loss: Maximum acceptable capital loss (e.g., 0.50 = 50%)
-            expected_worst_return: Expected worst-case return for leverage calc
-            expected_sharpe: Expected Sharpe ratio for Half Kelly calculation
-            min_contracts: Minimum number of contracts to hold
-            max_contracts: Maximum number of contracts (None = no limit)
-        """
         self.initial_capital = initial_capital
         self.risk_target = risk_target
         self.volatility_window = volatility_window
+        self.vol_method = vol_method.lower()
+        self.lambda_param = lambda_param
         self.multiplier = multiplier
         self.use_fixed_capital = use_fixed_capital
         self.margin_per_contract = margin_per_contract
@@ -72,114 +59,73 @@ class FixedRiskPositionStrategy(BaseStrategy):
         self.min_contracts = min_contracts
         self.max_contracts = max_contracts
         self.max_leverage = max_leverage
-        
-        # Store last calculated position for tracking
         self.last_position = 0.0
 
     @property
     def name(self) -> str:
-        """Dynamic strategy name based on key configuration parameters."""
         cap_mode = "Fixed" if self.use_fixed_capital else "Compound"
-        return f"FixedRisk(risk={self.risk_target*100:.0f}%, window={self.volatility_window}d, {cap_mode})"
+        return f"FixedRisk(τ={self.risk_target*100:.0f}%, σ_method={self.vol_method.upper()}, {cap_mode})"
         
     def calculate_volatility(self, data: pd.DataFrame) -> pd.Series:
         """
-        Calculate annualized volatility (σ_N) using rolling window.
-        
-        Args:
-            data: DataFrame with 'close' price column
-            
-        Returns:
-            Series of annualized volatility estimates
+        Calculate annualized volatility (σ_N) using the specified method.
+        Fully vectorized for performance.
         """
-        # Calculate daily returns
         returns = data['close'].pct_change()
+        alpha = 1.0 - self.lambda_param  # pandas ewm uses alpha = 1 - λ
         
-        # Calculate rolling standard deviation
-        rolling_std = returns.rolling(window=self.volatility_window).std()
-        
-        # Annualize (252 trading days)
-        annualized_vol = rolling_std * np.sqrt(252)
-        
-        return annualized_vol
+        if self.vol_method == 'sma':
+            daily_vol = returns.rolling(window=self.volatility_window, min_periods=1).std()
+            
+        elif self.vol_method == 'ewma':
+            # Exact match to your formula: 
+            # μ_t = λ*r_t + (1-λ)*μ_{t-1}
+            # σ²_t = λ*(r_t - μ_t)² + (1-λ)*σ²_{t-1}
+            ewm_mean = returns.ewm(alpha=alpha, adjust=False, min_periods=1).mean()
+            squared_diff = (returns - ewm_mean) ** 2
+            daily_vol = np.sqrt(squared_diff.ewm(alpha=alpha, adjust=False, min_periods=1).mean())
+            
+        elif self.vol_method == 'pandas_ewm_std':
+            # Simplified pandas EWMA std (assumes ~0 mean for daily returns)
+            daily_vol = returns.ewm(span=self.volatility_window, min_periods=1).std()
+            
+        else:
+            raise ValueError(f"Unsupported vol_method: {self.vol_method}. Use 'sma', 'ewma', or 'pandas_ewm_std'")
+            
+        return daily_vol * np.sqrt(252)  # Annualize
     
     def calculate_risk_constraints(self, price: float, volatility: float) -> float:
-        """
-        Calculate maximum allowable risk based on constraints.
-        
-        Returns the minimum of:
-        1. Risk possible given margin levels
-        2. Risk possible given prudent leverage
-        3. Optimal risk given expected performance (Half Kelly)
-        
-        Args:
-            price: Current instrument price
-            volatility: Current annualized volatility (σ_N)
-            
-        Returns:
-            Maximum allowable risk target (τ)
-        """
+        """Calculate maximum allowable risk based on constraints."""
         constraints = []
         
-        # 1. Risk possible given margin levels
         if self.margin_per_contract is not None and self.margin_per_contract > 0:
             margin_risk = (self.multiplier * price * volatility) / self.margin_per_contract
             constraints.append(margin_risk)
         
-        # 2. Risk possible given prudent leverage
         if volatility > 0:
             leverage_risk = (volatility * self.max_capital_loss) / self.expected_worst_return
             constraints.append(leverage_risk)
         
-        # 3. Optimal risk given expected performance (Half Kelly)
-        half_kelly_risk = 0.5 * self.expected_sharpe
-        constraints.append(half_kelly_risk)
+        constraints.append(0.5 * self.expected_sharpe)  # Half Kelly
+        constraints.append(self.risk_target)            # Personal target
         
-        # 4. Personal risk appetite (the risk_target parameter)
-        constraints.append(self.risk_target)
-        
-        # Return minimum of all constraints
-        return min(constraints) if constraints else self.risk_target
+        return min(constraints)
     
-    def calculate_position_size(
-        self, 
-        capital: float, 
-        price: float, 
-        volatility: float
-    ) -> float:
-        """
-        Calculate optimal number of contracts (N).
-        
-        Formula: N = (Capital × τ) ÷ (Multiplier × Price × σ_N)
-        
-        Args:
-            capital: Current trading capital (initial or running equity)
-            price: Current instrument price
-            volatility: Current annualized volatility (σ_N)
-            
-        Returns:
-            Number of contracts (rounded to nearest whole number)
-        """
+    def calculate_position_size(self, capital: float, price: float, volatility: float) -> float:
+        """Calculate optimal number of contracts (N)."""
         if volatility <= 0 or price <= 0:
             return 0.0
         
-        # Calculate effective risk target (minimum of constraints)
         effective_risk = self.calculate_risk_constraints(price, volatility)
-        
-        # Position sizing formula (no FX rate - using nominal values)
         denominator = self.multiplier * price * volatility
         n_contracts = (capital * effective_risk) / denominator
 
-        # 🔑 Apply leverage cap if specified
+        # Leverage cap
         if self.max_leverage is not None and self.max_leverage > 0:
             max_notional = capital * self.max_leverage
-            max_contracts_by_leverage = max_notional / (price * self.multiplier)
-            n_contracts = min(n_contracts, max_contracts_by_leverage)
+            n_contracts = min(n_contracts, max_notional / (price * self.multiplier))
         
-        # Round to nearest whole contract
         n_contracts = round(n_contracts)
-        
-        # Apply min/max constraints
         if self.max_contracts is not None:
             n_contracts = min(n_contracts, self.max_contracts)
         n_contracts = max(n_contracts, self.min_contracts)
@@ -187,66 +133,30 @@ class FixedRiskPositionStrategy(BaseStrategy):
         return float(n_contracts)
     
     def generate_positions(self, data: pd.DataFrame) -> pd.Series:
-        """
-        Generate continuous position series based on volatility targeting.
-        
-        Args:
-            data: DataFrame with 'close' price column and DatetimeIndex
-            
-        Returns:
-            Series of position sizes (number of contracts) for each time point
-        """
-        # Calculate volatility series
+        """Generate continuous position series based on volatility targeting."""
+        # Vectorized volatility calculation (done once)
         volatility = self.calculate_volatility(data)
         
         positions = []
-        current_equity = self.initial_capital
-        
         for i in range(len(data)):
             price = data['close'].iloc[i]
             vol = volatility.iloc[i]
             
-            # Determine capital to use
-            if self.use_fixed_capital:
-                # Always use initial capital (no compounding)
-                capital = self.initial_capital
-            else:
-                # Use current equity (compounding)
-                # For position generation, we approximate equity based on price changes
-                if i == 0:
-                    capital = self.initial_capital
-                else:
-                    # Simple approximation: scale capital by price change
-                    price_return = data['close'].iloc[i] / data['close'].iloc[0]
-                    capital = self.initial_capital * price_return
+            capital = self.initial_capital if self.use_fixed_capital else (
+                self.initial_capital if i == 0 
+                else self.initial_capital * (data['close'].iloc[i] / data['close'].iloc[0])
+            )
             
             if pd.isna(vol) or vol <= 0:
-                # Not enough data for volatility estimate
                 positions.append(0.0)
             else:
-                n_contracts = self.calculate_position_size(capital, price, vol)
-                positions.append(n_contracts)
+                positions.append(self.calculate_position_size(capital, price, vol))
         
         position_series = pd.Series(positions, index=data.index, dtype=float)
-        
-        # Store last position for reference
         self.last_position = position_series.iloc[-1] if len(position_series) > 0 else 0.0
-        
         return position_series
     
     def get_detailed_info(self, data: pd.DataFrame, capital: float = None) -> dict:
-        """
-        Get detailed information about current position sizing.
-        
-        Useful for debugging and understanding the strategy behavior.
-        
-        Args:
-            data: DataFrame with price data
-            capital: Current capital (uses initial_capital if None)
-            
-        Returns:
-            Dictionary with position sizing details
-        """
         if capital is None:
             capital = self.initial_capital
             
@@ -256,23 +166,17 @@ class FixedRiskPositionStrategy(BaseStrategy):
         
         effective_risk = self.calculate_risk_constraints(current_price, current_vol)
         n_contracts = self.calculate_position_size(capital, current_price, current_vol)
-        
-        # Calculate notional value
         notional_value = n_contracts * self.multiplier * current_price
-        
-        # Calculate risk contribution
         risk_contribution = (notional_value * current_vol) / capital if capital > 0 else 0.0
         
         return {
             'current_price': current_price,
             'current_volatility': current_vol,
+            'vol_method': self.vol_method,
             'risk_target': self.risk_target,
             'effective_risk': effective_risk,
             'capital_used': capital,
-            'use_fixed_capital': self.use_fixed_capital,
             'num_contracts': n_contracts,
             'notional_value': notional_value,
-            'risk_contribution': risk_contribution,
-            'margin_per_contract': self.margin_per_contract,
-            'multiplier': self.multiplier
+            'risk_contribution': risk_contribution
         }

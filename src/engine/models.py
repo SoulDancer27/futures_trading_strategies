@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import Dict
+from typing import Dict, Optional
 import pandas as pd
 
 @dataclass
@@ -17,6 +17,8 @@ class BacktestResult:
     daily_pnl: pd.Series        # Day-over-day profit/loss in currency units
     strategy_name: str = ""     # Human-readable strategy identifier
     ticker: str = ""            # Instrument/symbol being tested
+    cumulative_fees: Optional[pd.Series] = None
+    cumulative_turnover: Optional[pd.Series] = None
 
 
     def print_metrics(self) -> None:
