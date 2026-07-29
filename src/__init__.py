@@ -4,13 +4,16 @@
 from .data.loader import load_simple_price_csv
 
 # --- Engine ---
-from .engine.vectorized import VectorizedEngine, BacktestResult
+from .engine.vectorized import VectorizedEngine
+from .engine.models import BacktestResult, PortfolioResult
+from .engine.portfolio_analyzer import PortfolioAnalyzer
 
 # --- Strategies ---
 from .strategies.base import BaseStrategy
 from .strategies.buy_and_hold import BuyAndHoldStrategy
 from .strategies.fixed_risk_position import FixedRiskPositionStrategy
-from .strategies.vol_scaled_bnh import VolatilityScaledBNH
+from .strategies.ma_crossover import MACrossoverStrategy
+from .strategies.ewmac_forecast import EWMACForecastStrategy
 
 # --- Plots / Visualization ---
 from .plots.plotting import plot_results
@@ -22,12 +25,16 @@ __all__ = [
     "load_simple_price_csv",
     "VectorizedEngine",
     "BacktestResult",
+    "PortfolioResult",
+    "PortfolioAnalyzer",
     
     # Strategies
     "BaseStrategy",
     "BuyAndHoldStrategy",
     "FixedRiskPositionStrategy",
     "VolatilityScaledBNH",
+    "MACrossoverStrategy",
+    "EWMACForecastStrategy",
     
     # Visualization
     "plot_results",
