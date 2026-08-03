@@ -97,6 +97,7 @@ class FixedRiskPositionStrategy(BaseStrategy):
     def calculate_risk_constraints(self, price: float, volatility: float) -> float:
         """Calculate maximum allowable risk based on constraints."""
         constraints = []
+
         
         if self.margin_per_contract is not None and self.margin_per_contract > 0:
             margin_risk = (self.multiplier * price * volatility) / self.margin_per_contract
@@ -107,10 +108,11 @@ class FixedRiskPositionStrategy(BaseStrategy):
             constraints.append(leverage_risk)
         
         constraints.append(0.5 * self.expected_sharpe)  # Half Kelly
+        
         constraints.append(self.risk_target)            # Personal target
         
         return min(constraints)
-    
+
     def calculate_position_size(self, capital: float, price: float, volatility: float) -> float:
         """Calculate optimal number of contracts (N)."""
         if volatility <= 0 or price <= 0:
@@ -125,7 +127,10 @@ class FixedRiskPositionStrategy(BaseStrategy):
             max_notional = capital * self.max_leverage
             n_contracts = min(n_contracts, max_notional / (price * self.multiplier))
         
+        # Round to nearest integer contract
         n_contracts = round(n_contracts)
+        
+        # Apply absolute min/max constraints
         if self.max_contracts is not None:
             n_contracts = min(n_contracts, self.max_contracts)
         n_contracts = max(n_contracts, self.min_contracts)
@@ -138,23 +143,46 @@ class FixedRiskPositionStrategy(BaseStrategy):
         volatility = self.calculate_volatility(data)
         
         positions = []
+        current_capital = self.initial_capital
+        
         for i in range(len(data)):
             price = data['close'].iloc[i]
             vol = volatility.iloc[i]
             
-            capital = self.initial_capital if self.use_fixed_capital else (
-                self.initial_capital if i == 0 
-                else self.initial_capital * (data['close'].iloc[i] / data['close'].iloc[0])
-            )
+            # 1. Handle Capital based on the flag
+            if self.use_fixed_capital:
+                # FIXED CAPITAL: Always use initial capital (Carver's standard)
+                sizing_capital = self.initial_capital
+            else:
+                # COMPOUNDING: Update capital based on yesterday's P&L
+                if i > 0:
+                    prev_price = data['close'].iloc[i-1]
+                    prev_pos = positions[-1] if positions else 0.0
+                    prev_vol = volatility.iloc[i-1]
+                    
+                    if prev_price > 0 and prev_vol > 0:
+                        # Calculate yesterday's return
+                        price_return = (price - prev_price) / prev_price
+                        
+                        # Approximate yesterday's leverage to estimate portfolio growth
+                        approx_leverage = self.risk_target / prev_vol
+                        
+                        # Compound the capital
+                        current_capital = current_capital * (1 + (price_return * approx_leverage))
+                
+                sizing_capital = current_capital
             
+            # 2. Calculate Position
             if pd.isna(vol) or vol <= 0:
                 positions.append(0.0)
             else:
-                positions.append(self.calculate_position_size(capital, price, vol))
+                pos = self.calculate_position_size(sizing_capital, price, vol)
+                positions.append(pos)
         
         position_series = pd.Series(positions, index=data.index, dtype=float)
         self.last_position = position_series.iloc[-1] if len(position_series) > 0 else 0.0
         return position_series
+
     
     def get_detailed_info(self, data: pd.DataFrame, capital: float = None) -> dict:
         if capital is None:

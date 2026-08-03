@@ -67,34 +67,50 @@ def calculate_metrics(
     positions: pd.Series,
     initial_capital: float,
     risk_free_rate: float = 0.0,
-    trading_days: int = 252
+    trading_days: int = 252,
+    use_fixed_capital: bool = True  # <--- NEW PARAMETER
 ) -> dict:
     """
-    Calculate standard, net-of-fees performance metrics.
-    Returns a dict ready to be merged with engine-calculated fee metrics.
+    Calculate performance metrics.
     """
-    returns = equity.pct_change().dropna()
+    # 1. Calculate Returns based on Capital Assumption
+    if use_fixed_capital:
+        # Fixed Capital: Daily P&L / Initial Capital
+        # This perfectly matches Carver's methodology
+        returns = (daily_pnl / initial_capital).dropna()
+    else:
+        # Compounding: Percentage change of equity
+        returns = equity.pct_change().dropna()
+
+    # 2. Calculate Volatility on those specific returns
+    vol_pct = returns.std() * np.sqrt(trading_days) * 100
+    
+    # 3. Calculate CAGR (For fixed capital, CAGR is just Total Return / Years)
     total_return_pct = ((equity.iloc[-1] / initial_capital) - 1) * 100
     n_years = len(equity) / trading_days
-    cagr_pct = ((1 + total_return_pct/100) ** (1 / n_years) - 1) * 100 if n_years > 0 else 0.0
     
-    vol_pct = returns.std() * np.sqrt(trading_days) * 100
+    if use_fixed_capital:
+        # Simple annualized return for fixed capital
+        cagr_pct = (total_return_pct / 100 / n_years) * 100 if n_years > 0 else 0.0
+    else:
+        # Geometric annualized return for compounding
+        cagr_pct = ((1 + total_return_pct/100) ** (1 / n_years) - 1) * 100 if n_years > 0 else 0.0
+    
     sharpe_ratio = (cagr_pct/100 - risk_free_rate) / (vol_pct/100) if vol_pct > 0 else 0.0
     
-    # Drawdown metrics
+    # Drawdown metrics (Calculated on the actual equity curve regardless of method)
     rolling_max = equity.cummax()
     drawdown = (equity - rolling_max) / rolling_max
     max_drawdown_pct = drawdown.min() * 100
-    avg_drawdown_pct = calculate_average_drawdown(equity)
+    avg_drawdown_pct = calculate_average_drawdown(equity) # Assuming you have this helper
     
-    # Tail risk metrics (fat-tail ratios)
-    tail_metrics = calculate_tail_ratios(returns)
+    # Tail risk metrics
+    tail_metrics = calculate_tail_ratios(returns) # Assuming you have this helper
     
     # Win rate
     win_rate_pct = (daily_pnl > 0).sum() / len(daily_pnl) * 100 if len(daily_pnl) > 0 else 0.0
     
     return {
-        # Returns & Risk (all in %)
         'total_return_pct': total_return_pct,
         'cagr_pct': cagr_pct,
         'annual_volatility_pct': vol_pct,
@@ -102,7 +118,5 @@ def calculate_metrics(
         'max_drawdown_pct': max_drawdown_pct,
         'avg_drawdown_pct': avg_drawdown_pct,
         'win_rate_pct': win_rate_pct,
-        
-        # Distribution & Tail Metrics (dimensionless ratios)
         **tail_metrics
     }

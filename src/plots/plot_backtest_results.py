@@ -8,7 +8,7 @@ from matplotlib.ticker import FuncFormatter
 from pathlib import Path
 from datetime import datetime
 from typing import Union, List, Dict, Optional
-from ..engine.vectorized import BacktestResult
+from ..engine.vectorized import BacktestResult  # Adjust import path if necessary
 
 def plot_backtest_results(
     results: Union[BacktestResult, List[BacktestResult], Dict[str, BacktestResult]],
@@ -21,11 +21,17 @@ def plot_backtest_results(
     output_path: Optional[str] = None,
     colors: Optional[List[str]] = None,
     figsize_base: tuple = (14, 3.5),
-    multiplier: float = 1.0
+    multiplier: float = 1.0,
+    use_fixed_capital: bool = True  # <--- NEW PARAMETER
 ):
     """
     Plot backtest results with dynamic panel selection and multi-strategy support.
     Uses cumulative_fees & cumulative_turnover directly from BacktestResult.
+    
+    Args:
+        use_fixed_capital: If True, calculates returns and leverage relative to 
+                           the initial capital (Carver's method). If False, uses 
+                           compounding returns relative to the growing equity curve.
     """
     valid_panels = ['price', 'equity', 'positions', 'est_vol', 'realized_vol', 
                     'drawdown', 'leverage', 'cumulative_turnover', 'cumulative_fees']
@@ -64,16 +70,34 @@ def plot_backtest_results(
     cum_fees = {}
     
     for name, res in results_list:
-        rets = res.equity.pct_change()
+        initial_capital = res.equity.iloc[0]
+        
+        # --- FIX: Calculate returns based on capital assumption ---
+        if use_fixed_capital:
+            # Fixed Capital: Daily PnL / Initial Capital
+            rets = res.daily_pnl / initial_capital
+        else:
+            # Compounding: Percentage change of equity
+            rets = res.equity.pct_change()
+        # ----------------------------------------------------------
+        
         strat_returns[name] = rets
         real_vol[name] = rets.rolling(window=realized_vol_window, min_periods=1).std() * np.sqrt(252)
         drawdown[name] = (res.equity - res.equity.cummax()) / res.equity.cummax() * 100
         
+        # --- FIX: Calculate leverage based on capital assumption ---
         if data is not None and 'close' in data.columns:
             notional = res.positions * data['close'] * multiplier
-            leverage[name] = (notional / res.equity.replace(0, np.nan)).fillna(0).clip(lower=0)
+            
+            if use_fixed_capital:
+                # Fixed Capital: Leverage relative to constant initial capital
+                leverage[name] = (notional / initial_capital).fillna(0).clip(lower=0)
+            else:
+                # Compounding: Leverage relative to growing equity curve
+                leverage[name] = (notional / res.equity.replace(0, np.nan)).fillna(0).clip(lower=0)
         else:
             leverage[name] = pd.Series(0, index=res.equity.index)
+        # -----------------------------------------------------------
             
         cum_turnover[name] = getattr(res, 'cumulative_turnover', None)
         if cum_turnover[name] is None:
@@ -143,7 +167,7 @@ def plot_backtest_results(
         if panel == 'equity' and not plot_pct:
             ax.axhline(results_list[0][1].equity.iloc[0], color='gray', linestyle=':', linewidth=0.5, alpha=0.3)
 
-        # 🎨 Panel Formatting & Y-Axis Tickers
+        #  Panel Formatting & Y-Axis Tickers
         ax.set_title(panel.replace('_', ' ').title(), loc='left', fontweight='bold', fontsize=11, pad=12)
         ax.grid(True, alpha=0.3)
         ax.legend(loc='upper left', fontsize=9, framealpha=0.9, ncol=1 if n_strategies <= 3 else 2)
