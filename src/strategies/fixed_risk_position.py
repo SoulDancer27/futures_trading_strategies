@@ -30,20 +30,23 @@ class FixedRiskPositionStrategy(BaseStrategy):
     
     def __init__(
         self,
-        initial_capital: float = 100_000.0,    # Starting capital for position sizing
-        risk_target: float = 0.20,             # τ: Target annualized volatility (20%)
-        volatility_window: int = 252,          # Lookback for σ_N calculation
-        vol_method: str = 'sma',               # 'sma', 'ewma', or 'pandas_ewm_std'
-        lambda_param: float = 0.94,            # λ decay factor for EWMA (0.94 ≈ 20-day SMA)
-        multiplier: float = 1.0,               # Contract multiplier (point value)
-        use_fixed_capital: bool = True,        # True = use initial_capital, False = use current equity
-        margin_per_contract: Optional[float] = None,  # For risk constraints
-        max_capital_loss: float = 0.50,        # Maximum capital loss (50%)
-        expected_worst_return: float = 0.10,   # Expected worst return (10%)
-        expected_sharpe: float = 0.5,          # Expected Sharpe ratio for Half Kelly
-        min_contracts: int = 0,                # Minimum position size
-        max_contracts: Optional[int] = None,    # Maximum position size (None = unlimited)
-        max_leverage: Optional[float] = None   # Max notional/capital ratio (e.g., 2.0 = 2x)
+        initial_capital: float = 100_000.0,
+        risk_target: float = 0.20,
+        volatility_window: int = 252,
+        vol_method: str = 'sma',
+        lambda_param: float = 0.94,
+        multiplier: float = 1.0,
+        use_fixed_capital: bool = True,
+        margin_per_contract: Optional[float] = None,
+        max_capital_loss: float = 0.50,
+        expected_worst_return: float = 0.10,
+        expected_sharpe: float = 0.5,
+        min_contracts: int = 0,
+        max_contracts: Optional[int] = None,
+        max_leverage: Optional[float] = None,
+        # --- NEW PARAMETERS FOR BLENDED VOL ---
+        short_span: int = 32,    # Fast-reacting EWMA (approx 1 month)
+        long_span: int = 252     # Slow-reacting EWMA (approx 1 year)
     ):
         self.initial_capital = initial_capital
         self.risk_target = risk_target
@@ -59,6 +62,11 @@ class FixedRiskPositionStrategy(BaseStrategy):
         self.min_contracts = min_contracts
         self.max_contracts = max_contracts
         self.max_leverage = max_leverage
+        
+        # Store new parameters
+        self.short_span = short_span
+        self.long_span = long_span
+        
         self.last_position = 0.0
 
     @property
@@ -78,16 +86,31 @@ class FixedRiskPositionStrategy(BaseStrategy):
             daily_vol = returns.rolling(window=self.volatility_window, min_periods=1).std()
             
         elif self.vol_method == 'ewma':
-            # Exact match to your formula: 
-            # μ_t = λ*r_t + (1-λ)*μ_{t-1}
-            # σ²_t = λ*(r_t - μ_t)² + (1-λ)*σ²_{t-1}
+            # Exact EWMA with mean adjustment
+            alpha = 1.0 - self.lambda_param
+            # Calculate EWMA mean
             ewm_mean = returns.ewm(alpha=alpha, adjust=False, min_periods=1).mean()
-            squared_diff = (returns - ewm_mean) ** 2
-            daily_vol = np.sqrt(squared_diff.ewm(alpha=alpha, adjust=False, min_periods=1).mean())
+            # Calculate EWMA variance using the mean-adjusted returns
+            # This is the correct single-pass formula
+            daily_vol = (returns - ewm_mean).ewm(alpha=alpha, adjust=False, min_periods=1).std()
             
         elif self.vol_method == 'pandas_ewm_std':
             # Simplified pandas EWMA std (assumes ~0 mean for daily returns)
             daily_vol = returns.ewm(span=self.volatility_window, min_periods=1).std()
+
+        elif self.vol_method == 'blended':
+            # === BLENDED VOLATILITY ESTIMATOR (Carver's method) ===
+            # Both use exponential weighting, but with different spans
+
+            # Short-run: Fast-reacting (span=32 days, half-life ~11 days)
+            short_vol = returns.ewm(span=self.short_span, min_periods=1).std()
+    
+            # Long-run: Slow-reacting (span=252 days = 1 year)
+            # This changes very slowly and dampens the blended estimate
+            long_vol = returns.ewm(span=self.long_span, min_periods=1).std()
+    
+            # Blend: 70% short-run + 30% long-run
+            daily_vol = np.sqrt(0.7 * (short_vol ** 2) + 0.3 * (long_vol ** 2))
             
         else:
             raise ValueError(f"Unsupported vol_method: {self.vol_method}. Use 'sma', 'ewma', or 'pandas_ewm_std'")
