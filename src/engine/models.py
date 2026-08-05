@@ -7,10 +7,6 @@ import numpy as np
 class BacktestResult:
     """
     Immutable container for backtest execution results.
-    
-    Stores the equity curve, position sizing, performance metrics, and metadata
-    required for reporting, visualization, and statistical analysis. Designed to
-    be strategy-agnostic and easily serializable for database storage or CSV export.
     """
     equity: pd.Series           # Daily portfolio value (currency units)
     positions: pd.Series        # Contracts/shares held at each timestamp
@@ -21,15 +17,8 @@ class BacktestResult:
     cumulative_fees: Optional[pd.Series] = None
     cumulative_turnover: Optional[pd.Series] = None
 
-
     def print_metrics(self) -> None:
-        """
-        Print detailed performance metrics in a vertical key-value format.
-        
-        Ideal for terminal inspection, logging, or Jupyter notebook output.
-        Formats all floats to 2 decimal places for consistent readability.
-        Non-float values (e.g., counts, strings) are printed as-is.
-        """
+        """Print detailed performance metrics in a vertical key-value format."""
         print("📊 Backtest Metrics:")
         for key, value in self.metrics.items():
             if isinstance(value, float):
@@ -37,31 +26,15 @@ class BacktestResult:
             else:
                 print(f"  {key}: {value}")
 
-
     def print_summary(self) -> None:
-        """
-        Print a condensed, book-style summary table matching industry standards.
-        
-        Outputs a fixed-width ASCII table with aligned columns for quick visual
-        scanning. Includes core return/risk metrics, tail-risk measures, and
-        strategy metadata. Matches the formatting style used in quantitative
-        trading literature (e.g., Advanced Futures Trading Strategies).
-        
-        Calculations & Conventions:
-          - Years of data: Based on 252 trading days/year (equity markets)
-          - Percentages: Formatted with explicit signs (+/-) where relevant
-          - Missing metrics: Safely fallback to 0 via .get() to prevent KeyError
-          - Alignment: Left-aligned labels (40 chars), right-aligned values (24 chars)
-        """
-        # Calculate backtest duration in years (standard 252 trading days/year)
+        """Print a condensed, book-style summary table."""
         years = len(self.equity) / 252
         
         # Table header with strategy/instrument metadata
-        print("┌" + "─" * 70 + "")
+        print("┌" + "─" * 70 + "┐")  # <-- FIXED: Added the missing right corner
         print(f"│ Strategy: {self.strategy_name or 'Backtest':<40} │ {self.ticker or 'Instrument':<24} │")
-        print("├" + "─" * 70 + "┤")
+        print("├" + "─" * 70 + "┤")  # <-- FIXED: Added the missing left corner '├'
         
-        # Define metric rows with safe .get() fallbacks to handle missing keys
         metrics_table = [
             ("Years of data", f"{years:.1f}"),
             ("Mean annual return", f"{self.metrics.get('cagr_pct', 0):+.1f}%"),
@@ -74,7 +47,6 @@ class BacktestResult:
             ("Upper tail", f"{self.metrics.get('upper_tail', 0):.2f}"),
         ]
         
-        # Render table rows with consistent spacing and right-aligned values
         for label, value in metrics_table:
             print(f"│ {label:<40} │ {value:>24} │")
         
@@ -85,7 +57,6 @@ class BacktestResult:
 class PortfolioResult:
     """
     Smart container for portfolio-level analysis results.
-    Includes methods for formatting, comparison, and conversion.
     """
     portfolio_equity: pd.Series
     portfolio_returns: pd.Series
@@ -101,7 +72,7 @@ class PortfolioResult:
     portfolio_cumulative_turnover: Optional[pd.Series] = None
 
     # ==========================================
-    # 1. Diversification Metrics
+    # 1. Diversification Metrics (Calculated on demand)
     # ==========================================
     def get_diversification_metrics(self) -> Dict[str, Any]:
         """Calculate diversification-specific metrics."""
@@ -190,16 +161,14 @@ class PortfolioResult:
     # 4. Conversion to BacktestResult
     # ==========================================
     def to_backtest_result(self, name: str = "Portfolio") -> BacktestResult:
-        """
-        Convert portfolio analysis to BacktestResult format for visualization.
-        """
+        """Convert portfolio analysis to BacktestResult format for visualization."""
         daily_pnl = self.portfolio_equity.diff().fillna(0)
-        positions = pd.Series(1.0, index=self.portfolio_equity.index, name='positions')
-        
-        # No lazy import needed anymore!
+        initial_capital = self.portfolio_equity.iloc[0]
+        portfolio_positions = self.portfolio_leverage if hasattr(self, 'portfolio_leverage') and self.portfolio_leverage is not None else pd.Series(1.0, index=self.portfolio_equity.index)
+
         return BacktestResult(
             equity=self.portfolio_equity,
-            positions=positions,
+            positions=portfolio_positions,
             metrics=self.metrics,
             daily_pnl=daily_pnl,
             strategy_name=name,

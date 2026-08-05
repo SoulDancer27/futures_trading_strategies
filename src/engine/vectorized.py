@@ -6,9 +6,11 @@ Handles P&L calculation, transaction costs, slippage, and comprehensive metric a
 import pandas as pd
 import numpy as np
 from typing import Optional
+
 from ..strategies.base import BaseStrategy
 from .models import BacktestResult
 from .metrics import calculate_metrics
+from .capital_models import BaseCapitalModel, FixedCapitalModel  # <-- NEW IMPORTS
 
 
 class VectorizedEngine:
@@ -22,7 +24,10 @@ class VectorizedEngine:
         point_value: float = 1.0,               # $ per point (1.0 for stocks/spot, 50 for ES, etc.)
         commission_per_contract: Optional[float] = None,  # Fixed fee per contract/share
         commission_rate: Optional[float] = None,           # Decimal rate (0.001 = 0.1%)
-        slippage_rate: Optional[float] = None              # Decimal rate (0.0005 = 0.05%)
+        slippage_rate: Optional[float] = None,             # Decimal rate (0.0005 = 0.05%)
+        capital_model: Optional[BaseCapitalModel] = None,  # <-- NEW PARAMETER
+        risk_free_rate: float = 0.0,
+        trading_days: int = 252
     ):
         self.initial_capital = initial_capital
         self.point_value = point_value
@@ -38,18 +43,17 @@ class VectorizedEngine:
         # Default to zero fixed commission if neither specified
         if self.commission_per_contract is None and self.commission_rate is None:
             self.commission_per_contract = 0.0
+            
+        # Default to Fixed Capital Model (Carver's methodology) if none provided
+        self.capital_model = capital_model if capital_model is not None else FixedCapitalModel()
+        self.risk_free_rate = risk_free_rate
+        self.trading_days = trading_days
 
     def run(self, strategy: BaseStrategy, data: pd.DataFrame, 
             strategy_name: str = "", ticker: str = "") -> BacktestResult:
         """
         Execute backtest. Engine handles position generation internally
         to guarantee data/strategy alignment and prevent lookahead bias.
-
-        Args:
-            strategy: Strategy instance implementing generate_positions()
-            data: Price data with 'close' column
-            strategy_name: Optional override for strategy name
-            ticker: Optional ticker/instrument name
         """
         # 1. Generate positions from strategy (guarantees matching index)
         positions = strategy.generate_positions(data)
@@ -85,54 +89,18 @@ class VectorizedEngine:
         cumulative_fees = total_costs.cumsum()
         cumulative_turnover = turnover.cumsum()
         
-        # 7. Base performance metrics (return, vol, sharpe, drawdown, etc.)
-        metrics = calculate_metrics(equity, daily_pnl, pos, self.initial_capital)
-        
-        # 🔑 8. Fee-Adjusted Metrics (Calculated EXACTLY in engine, no estimation)
-        net_pnl = daily_pnl.sum()
-        gross_pnl = raw_pnl.sum()
-        total_fees = total_costs.sum()
-        n_years = len(equity) / 252.0
-        
-        # Cost efficiency ratios
-        fee_drag_ratio = total_fees / abs(gross_pnl) if gross_pnl != 0 else 0.0
-        cost_efficiency = net_pnl / gross_pnl if gross_pnl != 0 else 1.0
-        
-        # Gross vs Net Sharpe & Drag
-        gross_return = gross_pnl / self.initial_capital
-        gross_cagr = (1 + gross_return) ** (1 / n_years) - 1 if n_years > 0 else 0.0
-        
-        # Exact gross returns: raw P&L / previous equity
-        equity_prev = equity.shift(1).fillna(self.initial_capital)
-        gross_returns = raw_pnl / equity_prev
-        gross_vol = gross_returns.std() * np.sqrt(252)
-        gross_sharpe = gross_cagr / gross_vol if gross_vol > 0 else 0.0
-        
-        net_sharpe = metrics.get('sharpe_ratio', 0.0)
-        sharpe_drag = gross_sharpe - net_sharpe
-        
-        # Turnover-adjusted Sharpe (penalizes excessive churn)
-        avg_daily_turnover = turnover.mean()
-        turnover_penalty = avg_daily_turnover * 0.1  # Adjustable sensitivity
-        turnover_adjusted_sharpe = max(0.0, net_sharpe - turnover_penalty)
-        
-        # Merge fee/turnover metrics into the main metrics dictionary
-        metrics.update({
-            'gross_pnl': gross_pnl,
-            'gross_return': gross_return,
-            'gross_return_pct': gross_return * 100,
-            'net_pnl': net_pnl,
-            'total_fees_currency': total_fees,
-            'fee_drag_ratio': fee_drag_ratio,
-            'cost_efficiency': cost_efficiency,
-            'gross_sharpe_ratio': gross_sharpe,
-            'sharpe_drag': sharpe_drag,
-            'turnover_adjusted_sharpe': turnover_adjusted_sharpe,
-            'avg_daily_turnover': avg_daily_turnover,
-            'total_turnover': turnover.sum(),
-            'total_fee_drag_pct': (total_fees / self.initial_capital) * 100,
-            'annualized_fee_drag_pct': ((total_fees / self.initial_capital) * 100 / n_years) if n_years > 0 else 0.0
-        })
+        # 7. Base performance metrics (Delegated to metrics.py and capital_model)
+        metrics = calculate_metrics(
+            equity=equity,
+            daily_pnl=daily_pnl,
+            capital_model=self.capital_model,  # <-- PASSES THE MODEL
+            initial_capital=self.initial_capital,
+            positions=pos,
+            cumulative_fees=cumulative_fees,
+            cumulative_turnover=cumulative_turnover,
+            risk_free_rate=self.risk_free_rate,
+            trading_days=self.trading_days
+        )
         
         return BacktestResult(
             equity=equity,
