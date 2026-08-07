@@ -16,6 +16,10 @@ class BacktestResult:
     ticker: str = ""            # Instrument/symbol being tested
     cumulative_fees: Optional[pd.Series] = None
     cumulative_turnover: Optional[pd.Series] = None
+    price_data: Optional[pd.Series] = None
+    point_value: float = 1.0
+    leverage: Optional[pd.Series] = None
+    
 
     def print_metrics(self) -> None:
         """Print detailed performance metrics in a vertical key-value format."""
@@ -70,6 +74,7 @@ class PortfolioResult:
     
     portfolio_cumulative_fees: Optional[pd.Series] = None
     portfolio_cumulative_turnover: Optional[pd.Series] = None
+    portfolio_leverage: Optional[pd.Series] = None
 
     # ==========================================
     # 1. Diversification Metrics (Calculated on demand)
@@ -164,15 +169,49 @@ class PortfolioResult:
         """Convert portfolio analysis to BacktestResult format for visualization."""
         daily_pnl = self.portfolio_equity.diff().fillna(0)
         initial_capital = self.portfolio_equity.iloc[0]
-        portfolio_positions = self.portfolio_leverage if hasattr(self, 'portfolio_leverage') and self.portfolio_leverage is not None else pd.Series(1.0, index=self.portfolio_equity.index)
+
+        # Create composite price index from all strategies
+        composite_price = self._create_composite_price_index()
+    
+        # Dummy positions (since we now have a dedicated leverage field)
+        positions = pd.Series(0.0, index=self.portfolio_equity.index, name='positions')
+        #portfolio_positions = self.portfolio_leverage if hasattr(self, 'portfolio_leverage') and self.portfolio_leverage is not None else pd.Series(1.0, index=self.portfolio_equity.index)
 
         return BacktestResult(
             equity=self.portfolio_equity,
-            positions=portfolio_positions,
+            positions=positions,
             metrics=self.metrics,
             daily_pnl=daily_pnl,
             strategy_name=name,
             ticker="PORTFOLIO",
             cumulative_fees=self.portfolio_cumulative_fees,
-            cumulative_turnover=self.portfolio_cumulative_turnover
+            cumulative_turnover=self.portfolio_cumulative_turnover,
+            leverage=self.portfolio_leverage,
+            price_data=composite_price
         )
+
+    def _create_composite_price_index(self) -> pd.Series:
+        """
+        Create a composite price index from all individual strategy price data.
+        Uses equal weighting normalized to base 100.
+        """
+        price_series_list = []
+        
+        for i, strategy_name in enumerate(self.strategy_names):
+            # Find the corresponding result
+            result = next((r for r in self.results if r.strategy_name == strategy_name or r.ticker == strategy_name), None)
+            
+            if result is not None and result.price_data is not None:
+                # Normalize each price series to start at 100
+                normalized_price = (result.price_data / result.price_data.iloc[0]) * 100
+                price_series_list.append(normalized_price)
+        
+        if not price_series_list:
+            return None
+        
+        # Create DataFrame and calculate equal-weighted average
+        price_df = pd.DataFrame(price_series_list).T
+        composite_price = price_df.mean(axis=1)
+        composite_price.name = 'Portfolio_Composite_Price'
+        
+        return composite_price

@@ -41,6 +41,11 @@ class BaseCapitalModel(ABC):
         """Calculate the drawdown series."""
         pass
 
+    @abstractmethod
+    def calculate_leverage(self, notional: pd.Series, equity: pd.Series, initial_capital: float) -> pd.Series:
+        """Calculate leverage based on the capital model's definition of capital."""
+        pass
+
 
 class FixedCapitalModel(BaseCapitalModel):
     """
@@ -72,6 +77,10 @@ class FixedCapitalModel(BaseCapitalModel):
         rolling_max = equity.cummax()
         return (equity - rolling_max) / initial_capital
 
+    def calculate_leverage(self, notional: pd.Series, equity: pd.Series, initial_capital: float) -> pd.Series:
+        # Fixed Capital: Leverage relative to the constant initial capital
+        return (notional / initial_capital).fillna(0).clip(lower=0)
+
 
 class CompoundingCapitalModel(BaseCapitalModel):
     """
@@ -102,3 +111,7 @@ class CompoundingCapitalModel(BaseCapitalModel):
         # Drawdown relative to the growing peak equity
         rolling_max = equity.cummax()
         return (equity - rolling_max) / rolling_max
+
+    def calculate_leverage(self, notional: pd.Series, equity: pd.Series, initial_capital: float) -> pd.Series:
+        # Compounding: Leverage relative to the growing equity curve
+        return (notional / equity.replace(0, np.nan)).fillna(0).clip(lower=0)

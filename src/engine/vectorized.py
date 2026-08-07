@@ -88,8 +88,12 @@ class VectorizedEngine:
         # 6. Cumulative series for visualization & storage
         cumulative_fees = total_costs.cumsum()
         cumulative_turnover = turnover.cumsum()
+
+        # 7. Calculate Leverage internally (Self-contained result!)
+        notional = pos * data['close'] * self.point_value
+        leverage = self.capital_model.calculate_leverage(notional, equity, self.initial_capital)
         
-        # 7. Base performance metrics (Delegated to metrics.py and capital_model)
+        # 8. Base performance metrics (Delegated to metrics.py and capital_model)
         metrics = calculate_metrics(
             equity=equity,
             daily_pnl=daily_pnl,
@@ -110,5 +114,8 @@ class VectorizedEngine:
             strategy_name=strategy_name or strategy.__class__.__name__,
             ticker=ticker,
             cumulative_fees=cumulative_fees,
-            cumulative_turnover=cumulative_turnover
+            cumulative_turnover=cumulative_turnover,
+            price_data=data['close'].copy(),
+            point_value=self.point_value,
+            leverage=leverage
         )

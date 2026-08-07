@@ -26,8 +26,6 @@ class PortfolioAnalyzer:
         risk_free_rate: float = 0.0,
         trading_days_per_year: int = 252,
         capital_model: Optional[BaseCapitalModel] = None,
-        price_data: Optional[Dict[str, pd.Series]] = None,  # { 'StrategyName': price_series }
-        multipliers: Optional[Dict[str, float]] = None      # { 'Stra
     ):
         # 1. Parse strategies and names
         if isinstance(strategies, dict):
@@ -52,8 +50,6 @@ class PortfolioAnalyzer:
         
         # Default to Fixed Capital Model if none provided
         self.capital_model = capital_model if capital_model is not None else FixedCapitalModel()
-        self.price_data = price_data
-        self.multipliers = multipliers
         
         if len(set(self.strategy_names)) != len(self.strategy_names):
             raise ValueError("Strategy names must be unique.")
@@ -161,42 +157,31 @@ class PortfolioAnalyzer:
         return self.capital_model.calculate_equity(self.portfolio_returns, initial_capital)
 
     def _calculate_portfolio_leverage(self) -> Optional[pd.Series]:
-        """
-        Calculate true portfolio leverage (Total Notional Exposure / Equity).
-        Returns None if price data is not provided.
-        """
-        if self.price_data is None or self.multipliers is None:
-            return None
-            
+        """Calculate true portfolio leverage using embedded price data and point_value."""
         total_notional = None
         
-        for i, result in enumerate(self.results):
-            name = self.strategy_names[i]
-            
-            # Get price and multiplier for this strategy
-            price = self.price_data.get(name)
-            multiplier = self.multipliers.get(name, 1.0)
-            
-            if price is not None and hasattr(result, 'positions') and result.positions is not None:
-                # Align price to the portfolio index
-                price_aligned = price.reindex(self.portfolio_equity.index).fillna(method='ffill')
-                pos_aligned = result.positions.reindex(self.portfolio_equity.index).fillna(0)
+        for result in self.results:
+            if result.price_data is not None and result.positions is not None:
+                # Calculate notional for this strategy
+                notional = (result.positions * result.price_data * result.point_value)
                 
-                # Calculate notional exposure for this strategy
-                notional = pos_aligned * price_aligned * multiplier
+                # Align to portfolio index
+                notional = notional.reindex(self.portfolio_equity.index).fillna(0)
                 
-                if total_notional is None:
-                    total_notional = notional
-                else:
-                    total_notional = total_notional + notional
-                    
+                # Sum all notionals
+                total_notional = notional if total_notional is None else total_notional + notional
+        
         if total_notional is not None:
-            # Leverage = Total Notional Exposure / Portfolio Equity
-            # Use a small epsilon to avoid division by zero
-            equity_safe = self.portfolio_equity.replace(0, np.nan)
-            leverage = (total_notional / equity_safe).fillna(0)
-            return leverage
+            # Get initial capital for the portfolio (from the first strategy)
+            initial_capital = self.results[0].equity.iloc[0]
             
+            # Delegate to the capital model!
+            return self.capital_model.calculate_leverage(
+                total_notional, 
+                self.portfolio_equity, 
+                initial_capital
+            )
+        
         return None
 
     def _calculate_portfolio_metrics(self) -> Dict[str, float]:
@@ -238,5 +223,6 @@ class PortfolioAnalyzer:
             individual_metrics=self.individual_metrics,
             trading_days=self.trading_days,
             portfolio_cumulative_fees=self.portfolio_cumulative_fees,
-            portfolio_cumulative_turnover=self.portfolio_cumulative_turnover
+            portfolio_cumulative_turnover=self.portfolio_cumulative_turnover,
+            portfolio_leverage=self.portfolio_leverage
         )
