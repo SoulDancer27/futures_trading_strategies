@@ -75,3 +75,78 @@ def print_comparison_table(results: Dict[str, PerformanceMetrics]) -> None:
         print(row)
 
     print(bottom_border + "\n")
+
+# src/plots/reporter.py
+import pandas as pd
+import numpy as np
+from typing import List
+from ..core.models import ExecutionResult
+from ..engine.portfolio import PortfolioExecutionResult
+from ..engine.analyzer import PerformanceAnalyzer
+
+# ... (keep existing print_single_summary and print_comparison_table) ...
+
+def print_portfolio_diversification(portfolio_result: PortfolioExecutionResult) -> None:
+    """Prints the correlation matrix and diversification benefits."""
+    print("\n" + "═" * 60)
+    print("  PORTFOLIO DIVERSIFICATION ANALYSIS")
+    print("═" * 60)
+    
+    print(f"\n  Diversification Ratio:    {portfolio_result.diversification_ratio:>8.2f}")
+    print(f"  Volatility Reduction:     {portfolio_result.volatility_reduction_pct:>7.1f}%")
+    
+    print("\n  Correlation Matrix:")
+    print("─" * 60)
+    # Format the correlation matrix nicely
+    corr_str = portfolio_result.correlation_matrix.to_string(float_format="%.2f")
+    # Indent the matrix for better readability
+    for line in corr_str.split('\n'):
+        print(f"  {line}")
+    print("═" * 60 + "\n")
+
+
+def print_portfolio_comparison(
+    portfolio_result: PortfolioExecutionResult, 
+    individual_results: List[ExecutionResult]
+) -> None:
+    """
+    Compares individual strategies against the portfolio using the stateless Analyzer.
+    """
+    analyzer = PerformanceAnalyzer()
+    
+    # 1. Calculate metrics for all individual strategies
+    ind_metrics_list = [analyzer.analyze(res) for res in individual_results]
+    
+    # 2. Calculate metrics for the portfolio
+    port_metrics = analyzer.analyze(portfolio_result)
+    
+    # 3. Build the comparison data
+    rows = []
+    for i, res in enumerate(individual_results):
+        m = ind_metrics_list[i]
+        rows.append({
+            'Strategy': res.strategy_name,
+            'Weight': f"{portfolio_result.weights[i]*100:.0f}%",
+            'CAGR %': f"{m.cagr_pct:.1f}",
+            'Sharpe': f"{m.sharpe_ratio:.2f}",
+            'Max DD %': f"{m.max_drawdown_pct:.1f}",
+            'Vol %': f"{m.annual_volatility_pct:.1f}"
+        })
+        
+    # Add Portfolio row
+    rows.append({
+        'Strategy': 'PORTFOLIO',
+        'Weight': '100%',
+        'CAGR %': f"{port_metrics.cagr_pct:.1f}",
+        'Sharpe': f"{port_metrics.sharpe_ratio:.2f}",
+        'Max DD %': f"{port_metrics.max_drawdown_pct:.1f}",
+        'Vol %': f"{port_metrics.annual_volatility_pct:.1f}"
+    })
+    
+    df = pd.DataFrame(rows)
+    
+    print("\n" + "═" * 60)
+    print("  STRATEGY vs PORTFOLIO COMPARISON")
+    print("═" * 60)
+    print(df.to_string(index=False))
+    print("═" * 60 + "\n")
