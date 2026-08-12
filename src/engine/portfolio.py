@@ -1,14 +1,14 @@
 """
-Portfolio Builder and Analysis.
-Combines multiple ExecutionResults into a unified PortfolioExecutionResult.
+Portfolio Analysis.
+Combines multiple ExecutionResults into a unified Portfolio.
 """
 import pandas as pd
 import numpy as np
 from dataclasses import dataclass
 from typing import List, Dict, Union, Optional
 
-from ..core.models import ExecutionResult, Asset
-
+from ..core.models import ExecutionResult
+from ..core.asset import Asset
 
 @dataclass
 class PortfolioExecutionResult(ExecutionResult):
@@ -22,20 +22,18 @@ class PortfolioExecutionResult(ExecutionResult):
     volatility_reduction_pct: float = 0.0
 
 
-class PortfolioBuilder:
+
+class Portfolio(PortfolioExecutionResult):
     """
-    Aggregates multiple backtest results into a single portfolio time series.
+    A fully formed Portfolio object. 
+    Inherits from ExecutionResult, so it can be passed directly to the Analyzer or Plotter.
     """
     
-    def __init__(self, weights: Optional[Dict[str, float]] = None):
-        """
-        Args:
-            weights: Dictionary mapping strategy names to target weights (e.g., {'Strat A': 0.6, 'Strat B': 0.4}).
-                     If None, uses equal weighting (1/N).
-        """
-        self.target_weights = weights
-
-    def build(self, results: Union[List[ExecutionResult], Dict[str, ExecutionResult]]) -> PortfolioExecutionResult:
+    def __init__(
+        self, 
+        results: Union[List[ExecutionResult], Dict[str, ExecutionResult]], 
+        weights: Optional[Union[Dict[str, float], List[float]]] = None
+    ):
         # 1. Normalize input to a dictionary
         if isinstance(results, list):
             res_dict = {r.strategy_name: r for r in results}
@@ -43,66 +41,96 @@ class PortfolioBuilder:
             res_dict = results
             
         names = list(res_dict.keys())
-        if len(names) < 2:
-            raise ValueError("Portfolio requires at least 2 strategies.")
+        if len(names) < 1:
+            raise ValueError("Portfolio requires at least 1 strategy.")
 
         # 2. Align Equity and Returns
         equity_df = pd.DataFrame({name: res_dict[name].equity for name in names}).ffill().dropna()
         returns_df = pd.DataFrame({name: res_dict[name].returns for name in names}).reindex(equity_df.index).fillna(0)
         
         # 3. Calculate Weights
-        if self.target_weights is None:
+        if weights is None:
             w = np.ones(len(names)) / len(names)
-        else:
-            w = np.array([self.target_weights.get(n, 0.0) for n in names])
-            if w.sum() == 0:
-                raise ValueError("Weights sum to zero.")
+        elif isinstance(weights, dict):
+            w = np.array([weights.get(n, 0.0) for n in names])
+            if w.sum() == 0: raise ValueError("Weights sum to zero.")
             w = w / w.sum()
+        elif isinstance(weights, list):
+            if len(weights) != len(names):
+                raise ValueError(f"Number of weights ({len(weights)}) must match number of strategies ({len(names)}).")
+            w = np.array(weights)
+            if w.sum() == 0: raise ValueError("Weights sum to zero.")
+            w = w / w.sum()
+        else:
+            raise TypeError("weights must be None, dict, or list")
 
         # 4. Calculate Portfolio Series
-        # Weighted average of daily returns
         port_returns = (returns_df * w).sum(axis=1)
-        
-        # Convert returns to PnL and Equity (assuming Fixed Capital model logic)
-        initial_cap = equity_df.iloc[0, 0] # Use first strategy's capital as base
+        initial_cap = equity_df.iloc[0, 0]
         port_daily_pnl = port_returns * initial_cap
         port_equity = initial_cap + port_daily_pnl.cumsum()
-        
-        # Drawdown
         drawdown = ((port_equity - port_equity.cummax()) / initial_cap * 100)
         
         # Leverage (Weighted average of individual leverages)
         leverage_df = pd.DataFrame({name: res_dict[name].leverage for name in names}).reindex(port_equity.index).fillna(0)
         port_leverage = (leverage_df * w).sum(axis=1)
 
-        # 5. Calculate Diversification Metrics
-        corr_matrix = returns_df.corr()
-        ind_vols = returns_df.std() * np.sqrt(res_dict[names[0]].asset.trading_days)
-        port_vol = port_returns.std() * np.sqrt(res_dict[names[0]].asset.trading_days)
-        weighted_sum_vols = np.sum(w * ind_vols.values)
-        
-        div_ratio = weighted_sum_vols / port_vol if port_vol > 0 else 1.0
-        vol_reduction = (1 - port_vol / weighted_sum_vols) * 100 if weighted_sum_vols > 0 else 0.0
+        # 5. Aggregate REAL Fees and Turnover (Weighted sum)
+        fees_df = pd.DataFrame({name: res_dict[name].cumulative_fees for name in names}).reindex(port_equity.index).fillna(0)
+        port_cumulative_fees = (fees_df * w).sum(axis=1)
 
-        # 6. Create Dummy Asset for Compatibility
-        # The PerformanceAnalyzer needs an asset to get trading_days.
+        turnover_df = pd.DataFrame({name: res_dict[name].cumulative_turnover for name in names}).reindex(port_equity.index).fillna(0)
+        port_cumulative_turnover = (turnover_df * w).sum(axis=1)
+
+        # 6. Create Composite Price Index from REAL asset prices
+        price_series_list = []
+        for name in names:
+            asset_price = res_dict[name].asset.price_data
+            if asset_price is not None:
+                normalized_price = (asset_price / asset_price.iloc[0]) * 100
+                price_series_list.append(normalized_price)
+        
+        if price_series_list:
+            price_df = pd.DataFrame(price_series_list).T
+            composite_price = (price_df * w).sum(axis=1)
+            composite_price.name = 'Portfolio_Composite_Price'
+        else:
+            composite_price = None
+
+        # 7. Calculate Diversification Metrics
+        if len(names) == 1:
+            corr_matrix = pd.DataFrame([[1.0]], columns=names, index=names)
+            div_ratio = 1.0
+            vol_reduction = 0.0
+        else:
+            corr_matrix = returns_df.corr()
+            ind_vols = returns_df.std() * np.sqrt(res_dict[names[0]].asset.trading_days)
+            port_vol = port_returns.std() * np.sqrt(res_dict[names[0]].asset.trading_days)
+            weighted_sum_vols = np.sum(w * ind_vols.values)
+            
+            div_ratio = weighted_sum_vols / port_vol if port_vol > 0 else 1.0
+            vol_reduction = (1 - port_vol / weighted_sum_vols) * 100 if weighted_sum_vols > 0 else 0.0
+
+        # 8. Create Dummy Asset for Compatibility
         dummy_asset = Asset(
             ticker="PORTFOLIO",
-            price_data=port_equity, 
-            trading_days=res_dict[names[0]].asset.trading_days
+            price_data=composite_price, 
+            trading_days=res_dict[names[0]].asset.trading_days,
+            point_value=1.0
         )
 
-        return PortfolioExecutionResult(
+        # 9. Initialize the parent ExecutionResult class with all calculated data
+        super().__init__(
             equity=port_equity,
             daily_pnl=port_daily_pnl,
-            positions=pd.Series(0.0, index=port_equity.index), # Dummy positions
+            positions=pd.Series(0.0, index=port_equity.index),
             leverage=port_leverage,
             drawdown=drawdown,
             returns=port_returns,
             realized_vol=port_returns.rolling(21, min_periods=1).std() * np.sqrt(dummy_asset.trading_days) * 100,
-            cumulative_fees=pd.Series(0.0, index=port_equity.index), # TODO: Aggregate fees later
-            cumulative_turnover=pd.Series(0.0, index=port_equity.index),
-            strategy_name="Portfolio",
+            cumulative_fees=port_cumulative_fees,
+            cumulative_turnover=port_cumulative_turnover,
+            strategy_name="Portfolio" if len(names) > 1 else names[0],
             asset=dummy_asset,
             risk_free_rate=res_dict[names[0]].risk_free_rate,
             weights=w,
