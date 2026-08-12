@@ -1,14 +1,10 @@
-"""
-Core module: Pure data structures, configuration, and mathematical models.
-"""
-from .asset import Asset, Capital
-from .models import BacktestResult, PortfolioResult
-from .capital import BaseCapitalModel, FixedCapitalModel
+from .asset import Asset
+from .capital import BaseCapitalModel, FixedCapitalModel, Capital
 from .sizers import BasePositionSizer, FixedFractionSizer, FixedContractsSizer, FixedRiskSizer
+from .models import ExecutionResult, PerformanceMetrics
 
 __all__ = [
-    "Asset", "Capital",
-    "BacktestResult", "PortfolioResult",
+    "Asset", "Capital", "ExecutionResult", "PerformanceMetrics",
     "BaseCapitalModel", "FixedCapitalModel",
     "BasePositionSizer", "FixedFractionSizer", "FixedContractsSizer", "FixedRiskSizer"
 ]

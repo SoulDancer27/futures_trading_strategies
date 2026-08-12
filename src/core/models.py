@@ -1,49 +1,60 @@
 """
 Core Data Models.
-Pure data containers for backtest and portfolio results.
+Pure data containers for execution and analysis.
 """
 from dataclasses import dataclass
-from typing import Dict, List
+from typing import Optional, Dict
 import pandas as pd
 import numpy as np
-
 from .asset import Asset 
 
 @dataclass
-class BacktestResult:
+class ExecutionResult:
     """
-    Immutable container for a single strategy backtest.
-    All fields are mandatory to ensure strict contracts between Engine and Analyzer/Plotter.
+    Pure time-series data representing the day-by-day execution of a strategy.
+    Contains NO aggregate metrics.
     """
-    equity: pd.Series                       # Daily portfolio value
-    positions: pd.Series                    # Contracts/shares held
-    daily_pnl: pd.Series                    # Day-over-day P&L
-    metrics: Dict[str, float]               # Performance statistics
-    
-    strategy_name: str = ""                 # Human-readable strategy name
-    asset: Asset                            # Stores ticker, price_data, point_value, etc.
-    
-    cumulative_fees: pd.Series              # Cumulative transaction costs (can be 0)
-    cumulative_turnover: pd.Series          # Cumulative contracts traded (can be 0)
-    leverage: pd.Series                     # jPortfolio leverage/exposure
-    drawdown: pd.Series
+    equity: pd.Series                       
+    daily_pnl: pd.Series                    
+    positions: pd.Series                    
+    leverage: pd.Series                     
+    drawdown: pd.Series                     
+    returns: pd.Series                      
+    realized_vol: pd.Series                 
+    cumulative_fees: pd.Series              
+    cumulative_turnover: pd.Series          
 
+    asset: Asset 
+    strategy_name: str = ""                                            
+    risk_free_rate: float = 0.0             
 
 @dataclass
-class PortfolioResult:
+class PerformanceMetrics:
     """
-    Immutable container for a multi-asset portfolio analysis.
+    Aggregate scalar statistics derived from an ExecutionResult.
     """
-    portfolio_equity: pd.Series
-    portfolio_returns: pd.Series
-    individual_returns: pd.DataFrame
-    weights: np.ndarray
-    strategy_names: List[str]
-    metrics: Dict[str, float]
-    correlation_matrix: pd.DataFrame
-    individual_metrics: List[Dict[str, float]]
-    trading_days: int = 252
-    
-    cumulative_fees: pd.Series              # MANDATORY
-    cumulative_turnover: pd.Series          # MANDATORY
-    portfolio_leverage: pd.Series           # MANDATORY
+    total_return_pct: float
+    cagr_pct: float
+    annual_volatility_pct: float
+    sharpe_ratio: float
+    sortino_ratio: float
+    max_drawdown_pct: float
+    avg_drawdown_pct: float
+    win_rate_pct: float
+    skew: float
+    kurtosis: float
+    lower_tail: float
+    upper_tail: float
+    tail_risk: float
+    gross_pnl: float
+    net_pnl: float
+    total_fees_currency: float
+    fee_drag_ratio: float
+    cost_efficiency: float
+    gross_sharpe_ratio: float
+    sharpe_drag: float
+    turnover_adjusted_sharpe: float
+    avg_daily_turnover: float
+    total_turnover: float
+    total_fee_drag_pct: float
+    annualized_fee_drag_pct: float

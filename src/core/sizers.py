@@ -1,7 +1,8 @@
 from abc import ABC, abstractmethod
 import pandas as pd
 import numpy as np
-from .asset import Capital, Asset
+from .asset import Asset
+from .capital import Capital
 
 class BasePositionSizer(ABC):
     """

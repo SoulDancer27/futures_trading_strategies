@@ -4,7 +4,6 @@ Uses a Panel Registry pattern for clean, extensible plotting.
 Strictly "dumb": reads pre-calculated series from ExecutionResult.
 """
 import matplotlib.pyplot as plt
-import numpy as np
 import pandas as pd
 from matplotlib.ticker import FuncFormatter
 from pathlib import Path
@@ -29,11 +28,11 @@ def prepare_plot_data(
         plot_data[name] = {
             'equity': res.equity,
             'positions': res.positions,
-            'drawdown': res.drawdown,          # Pre-calculated %
+            'drawdown': res.drawdown,
             'leverage': res.leverage,
             'cumulative_fees': res.cumulative_fees,
             'cumulative_turnover': res.cumulative_turnover,
-            'realized_vol': res.realized_vol,  # Pre-calculated %
+            'realized_vol': res.realized_vol,
             'price': res.asset.price_data if res.asset else None
         }
         
@@ -43,7 +42,6 @@ def prepare_plot_data(
 # ==========================================
 # 2. PANEL RENDERERS (The Modules)
 # ==========================================
-# Update all renderer functions to accept **kwargs
 def _render_equity(ax, data, names, colors, plot_pct=False, **kwargs):
     for name, color in zip(names, colors):
         eq = data[name]['equity']
@@ -88,8 +86,7 @@ def _render_cumulative_turnover(ax, data, names, colors, **kwargs):
     for name, color in zip(names, colors):
         ax.plot(data[name]['cumulative_turnover'].index, data[name]['cumulative_turnover'], label=name, color=color, linewidth=1.5, alpha=0.85)
 
-def _render_price(ax, data, names, colors, **kwargs):  # Added **kwargs
-    # Just plot the price of the first strategy
+def _render_price(ax, data, names, colors, **kwargs):
     price = data[names[0]]['price']
     if price is not None:
         ax.plot(price.index, price, label='Price', color='black', linewidth=1.2, alpha=0.7)
