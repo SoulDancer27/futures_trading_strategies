@@ -66,14 +66,13 @@ class FixedRiskSizer(BasePositionSizer):
     def __init__(
         self,
         risk_target: float = 0.20,          # Target annualized risk (e.g., 0.20 = 20%)
-        vol_method: str = 'blended',        # 'sma', 'ewma', 'pandas_ewm_std', 'blended'
+        vol_method: str = 'sma',        # 'sma', 'ewma', 'pandas_ewm_std', 'blended'
         volatility_window: int = 252,       # Lookback for SMA/EWMA
         short_span: int = 32,               # Fast EWMA span (approx 1 month)
         long_span: int = 252,               # Slow EWMA span (approx 1 year)
+        alpha: float = 0.06,             
         margin_per_contract: float = None,  # Margin requirement per contract
-        max_capital_loss: float = 0.50,     # Max capital loss constraint
-        expected_worst_return: float = 0.10,# Expected worst return for leverage constraint
-        expected_sharpe: float = 0.5,       # Expected Sharpe for Half Kelly constraint
+        expected_sharpe: float = 0.5,       # Expected Sharpe for Half Kelly cap
         min_contracts: int = 0,
         max_contracts: int = None,
         max_leverage: float = None          # Absolute leverage cap
@@ -83,10 +82,9 @@ class FixedRiskSizer(BasePositionSizer):
         self.volatility_window = volatility_window
         self.short_span = short_span
         self.long_span = long_span
+        self.alpha = alpha
         
         self.margin_per_contract = margin_per_contract
-        self.max_capital_loss = max_capital_loss
-        self.expected_worst_return = expected_worst_return
         self.expected_sharpe = expected_sharpe
         
         self.min_contracts = min_contracts
@@ -101,7 +99,7 @@ class FixedRiskSizer(BasePositionSizer):
             daily_vol = returns.rolling(window=self.volatility_window, min_periods=1).std()
         elif self.vol_method == 'ewma':
             # RiskMetrics EWMA (lambda = 0.94)
-            daily_vol = returns.ewm(alpha=0.06, adjust=False, min_periods=1).std()
+            daily_vol = returns.ewm(alpha=self.alpha, adjust=False, min_periods=1).std()
         elif self.vol_method == 'pandas_ewm_std':
             daily_vol = returns.ewm(span=self.volatility_window, min_periods=1).std()
         elif self.vol_method == 'blended':
@@ -115,44 +113,34 @@ class FixedRiskSizer(BasePositionSizer):
         return daily_vol * np.sqrt(trading_days)
 
     def calculate_position(self, signal: pd.Series, capital: Capital, asset: Asset) -> pd.Series:
-        # 1. Calculate Volatility Series
-        vol = self._calculate_volatility(asset.price_data, asset.trading_days)
-        vol = vol.replace(0, np.nan).fillna(self.risk_target) # Prevent div by zero
-        
         price = asset.price_data
         multiplier = asset.point_value
-        
-        # 2. Calculate Effective Risk Constraints (Vectorized)
-        constraints = [pd.Series(self.risk_target, index=price.index)] # Personal target
-        
-        if self.margin_per_contract and self.margin_per_contract > 0:
-            margin_risk = (multiplier * price * vol) / self.margin_per_contract
-            constraints.append(margin_risk)
-            
-        if vol.any() > 0:
-            leverage_risk = (vol * self.max_capital_loss) / self.expected_worst_return
-            constraints.append(leverage_risk)
-            
-        half_kelly = 0.5 * self.expected_sharpe
-        constraints.append(pd.Series(half_kelly, index=price.index))
-        
-        # Take the minimum constraint for each day
-        effective_risk = pd.concat(constraints, axis=1).min(axis=1)
-        
-        # 3. Calculate Raw Contracts: N = (Capital * effective_risk) / (Multiplier * Price * Vol)
-        denominator = multiplier * price * vol
-        raw_contracts = (capital.initial_capital * effective_risk) / denominator
-        
-        # 4. Apply Leverage Cap
+
+        # 1. Annualized volatility. Zero/missing vol -> NaN (position will be flat).
+        vol = self._calculate_volatility(price, asset.trading_days)
+        vol = vol.replace(0, np.nan)
+
+        # 2. Effective risk target: min(personal target, half-Kelly cap).
+        #    Both are annualized-risk fractions, so the min is meaningful.
+        effective_risk = min(self.risk_target, 0.5 * self.expected_sharpe)
+
+        # 3. Base position via volatility targeting (Carver):
+        #    contracts = (capital * risk) / (price * point_value * annualized_vol)
+        raw_contracts = (capital.initial_capital * effective_risk) / (multiplier * price * vol)
+
+        # 4. Position caps (clip upper), applied in order.
         if self.max_leverage is not None and self.max_leverage > 0:
             max_notional = capital.initial_capital * self.max_leverage
-            max_contracts_lev = max_notional / (price * multiplier)
-            raw_contracts = raw_contracts.clip(upper=max_contracts_lev)
-            
-        # 5. Round and Apply Absolute Min/Max
-        final_contracts = raw_contracts.round(0).clip(lower=self.min_contracts)
+            raw_contracts = raw_contracts.clip(upper=max_notional / (price * multiplier))
+
+        if self.margin_per_contract is not None and self.margin_per_contract > 0:
+            raw_contracts = raw_contracts.clip(upper=capital.initial_capital / self.margin_per_contract)
+
         if self.max_contracts is not None:
-            final_contracts = final_contracts.clip(upper=self.max_contracts)
-            
-        # 6. Multiply by Signal (so 0 signal = 0 contracts) and fill NaNs
+            raw_contracts = raw_contracts.clip(upper=self.max_contracts)
+
+        # 5. Round, apply min, and flatten where vol was unknown (NaN -> 0).
+        final_contracts = raw_contracts.round(0).clip(lower=self.min_contracts)
+
+        # 6. Direction (signal) and fill any remaining NaN (warm-up).
         return (final_contracts * signal).fillna(0)

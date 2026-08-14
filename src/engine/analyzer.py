@@ -8,13 +8,17 @@ import numpy as np
 from typing import Dict
 
 from ..core.models import ExecutionResult, PerformanceMetrics
+from ..core.capital import Capital
 
 
 class PerformanceAnalyzer:
     """
-    Stateless analyzer. 
+    Stateless analyzer. Delegates capital-model math to the injected Capital.
     """
-    
+
+    def __init__(self, capital: Capital):
+        self.capital = capital
+
     def analyze(self, result: ExecutionResult) -> PerformanceMetrics:
         """Main entry point: calculates all scalar metrics from the ExecutionResult."""
         
@@ -23,21 +27,23 @@ class PerformanceAnalyzer:
         equity = result.equity
         drawdown = result.drawdown
         
-        # Extract environment parameters directly from the result
-        risk_free_rate = result.risk_free_rate
+        # Environment parameters: Capital is the single source of truth.
+        capital_model = self.capital.capital_model
+        initial_capital = self.capital.initial_capital
+        risk_free_rate = self.capital.risk_free_rate
         trading_days = result.asset.trading_days
         n_years = len(equity) / trading_days
         
-        # --- Core Metrics ---
-        total_return = returns.sum()
-        cagr = total_return / n_years if n_years > 0 else 0.0
+        # --- Core Metrics (delegated to the capital model) ---
+        total_return = capital_model.calculate_total_return(returns)
+        cagr = capital_model.calculate_cagr(total_return, n_years)
         
-        vol_pct = returns.std() * np.sqrt(trading_days) * 100
-        sharpe = (cagr - risk_free_rate) / (vol_pct / 100) if vol_pct > 0 else 0.0
+        vol_decimal = returns.std() * np.sqrt(trading_days) 
+        sharpe = (cagr - risk_free_rate) / (vol_decimal) if vol_decimal > 0 else 0.0
         
         downside_returns = returns[returns < 0]
         downside_vol = downside_returns.std() * np.sqrt(trading_days) if len(downside_returns) > 0 else 0.0
-        sortino = (cagr - risk_free_rate) / (downside_vol / 100) if downside_vol > 0 else 0.0
+        sortino = (cagr - risk_free_rate) / (downside_vol) if downside_vol > 0 else 0.0
         
         max_dd = drawdown.min()
         avg_dd = self._calculate_avg_drawdown(drawdown)
@@ -50,8 +56,11 @@ class PerformanceAnalyzer:
         tail_metrics = self._calculate_tail_ratios(returns)
         
         # --- Fee & Turnover Analysis ---
-        daily_fees = result.cumulative_fees.diff().fillna(0)
-        daily_turnover = result.cumulative_turnover.diff().fillna(0)
+        # Recover per-day costs from cumulative series. diff() leaves the first
+        # element NaN; set it to the first cumulative value so day-0 costs/turnover
+        # are never silently dropped.
+        daily_fees = result.cumulative_fees.diff().fillna(result.cumulative_fees.iloc[0])
+        daily_turnover = result.cumulative_turnover.diff().fillna(result.cumulative_turnover.iloc[0])
         
         raw_pnl = daily_pnl + daily_fees
         net_pnl = daily_pnl.sum()
@@ -61,13 +70,12 @@ class PerformanceAnalyzer:
         fee_drag_ratio = total_fees / abs(gross_pnl) if gross_pnl != 0 else 0.0
         cost_efficiency = net_pnl / gross_pnl if gross_pnl != 0 else 1.0
         
-        initial_capital = equity.iloc[0]
-        gross_return = gross_pnl / initial_capital
-        gross_cagr = gross_return / n_years if n_years > 0 else 0.0
-        
-        equity_prev = equity.shift(1).fillna(initial_capital)
-        gross_returns = raw_pnl / equity_prev
-        gross_vol = gross_returns.std() * np.sqrt(trading_days) * 100
+        # Gross (pre-cost) metrics — delegated to the capital model, like net metrics.
+        gross_returns = capital_model.calculate_returns(equity, raw_pnl, initial_capital)
+        gross_return = capital_model.calculate_total_return(gross_returns)
+        gross_cagr = capital_model.calculate_cagr(gross_return, n_years)
+
+        gross_vol = gross_returns.std() * np.sqrt(trading_days)
         gross_sharpe = gross_cagr / gross_vol if gross_vol > 0 else 0.0
         
         sharpe_drag = gross_sharpe - sharpe
@@ -79,7 +87,8 @@ class PerformanceAnalyzer:
         return PerformanceMetrics(
             total_return_pct=total_return * 100,
             cagr_pct=cagr * 100,
-            annual_volatility_pct=vol_pct,
+            annual_volatility_pct=vol_decimal*100,
+            gross_return_pct=gross_return*100,
             sharpe_ratio=sharpe,
             sortino_ratio=sortino,
             max_drawdown_pct=max_dd,

@@ -124,7 +124,7 @@ PANEL_FORMATTERS: Dict[str, Callable] = {
 # ==========================================
 def plot_backtest_results(
     results: Union[ExecutionResult, List[ExecutionResult], Dict[str, ExecutionResult]],
-    panels: List[str] = ['equity', 'drawdown', 'leverage'],
+    panels: List[str] = ['equity', 'drawdown', 'leverage', 'cumulative_fees', 'realized_vol'],
     save_to_file: bool = False,
     plot_pct: bool = False,
     output_path: Optional[str] = None,

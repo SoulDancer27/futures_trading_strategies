@@ -1,90 +1,105 @@
-Here is a comprehensive summary of the `trimmed-architecture` branch. Save this as `ARCHITECTURE_STATUS.md` in your project root so we can pick up exactly where we left off tomorrow.
+# Architecture Status
 
-***
+A living snapshot of the backtesting framework's architecture and current state.
 
-# `trimmed-architecture` Branch Status & Architecture Guide
+---
 
 ## 1. Core Philosophy
-The goal of this branch is to completely refactor the backtesting infrastructure into a clean, modular, and mathematically honest system. 
-* **Separation of Concerns:** Strict boundaries between Data (Core), Execution (Engine), Analytics (Analyzer), and Visualization (Plotter).
-* **No "God Objects":** Eliminate massive classes/functions that do everything. 
-* **Fail-Fast:** Use dataclass validation to catch errors immediately.
-* **Pure Data Containers:** Results should just hold data; logic belongs in dedicated modules.
 
-## 2. New Directory Structure
+- **Separation of Concerns:** strict boundaries between Data (`core`), Execution & Analytics (`engine`), Strategies, and Visualization.
+- **No "God Objects":** small, single-responsibility classes/functions.
+- **Fail-Fast:** dataclass validation catches errors immediately.
+- **Pure Data Containers:** results hold data only; logic lives in dedicated modules.
+- **Single Source of Truth for Math:** capital-model math is delegated to the `Capital` abstraction, never re-implemented ad hoc.
+
+## 2. Directory Structure
+
 ```text
 src/
-├── core/                   # Pure data structures, config, and math models
+├── core/                   # Data structures, capital model, and math
 │   ├── asset.py            # Asset dataclass
-│   ├── capital.py          # Capital dataclass + Capital Models
-│   ├── sizers.py           # Position Sizers (Signal -> Position bridge)
-│   └── models.py           # BacktestResult, PortfolioResult (Pure data)
+│   ├── capital.py          # BaseCapitalModel (ABC) + FixedCapitalModel + Capital
+│   ├── sizers.py           # Position sizers (Signal -> Position bridge)
+│   ├── models.py           # ExecutionResult, PerformanceMetrics (pure data)
+│   └── __init__.py
 │
-├── engine/                 # Execution and analysis logic
-│   ├── vectorized.py       # VectorizedEngine (Execution & Accounting only)
-│   └── analyzer.py         # PerformanceAnalyzer (Analytics & Metrics)
+├── engine/                 # Execution, analysis, portfolio, and facade
+│   ├── vectorized.py       # VectorizedEngine (execution & accounting)
+│   ├── analyzer.py         # PerformanceAnalyzer (analytics & metrics)
+│   ├── portfolio.py        # Portfolio, PortfolioExecutionResult
+│   ├── runner.py           # BacktestRunner, BacktestReport (facade)
+│   └── __init__.py
 │
-├── strategies/             # Strategy implementations
+├── strategies/             # Strategy implementations (signal generators)
 │   ├── base.py             # BaseStrategy (generate_signals)
-│   └── buy_and_hold.py     # BuyAndHoldStrategy
+│   ├── buy_and_hold.py     # BuyAndHoldStrategy
+│   ├── ma_crossover.py     # MACrossoverStrategy (sma/ema, long_only/long_short)
+│   ├── ewmac.py            # EWMACStrategy (trend strength)
+│   └── __init__.py
 │
 ├── data/                   # Data loading
-│   └── loader.py           # Simple CSV loaders
+│   ├── loader.py           # load_simple_price_csv
+│   └── __init__.py
 │
-├── plots/                  # Visualization
-│   └── plotter.py          # Modular Panel Registry plotter
+├── visualization/          # Drawing & reporting (no math)
+│   ├── plotter.py          # Panel-registry plotter
+│   ├── reporter.py         # Console summaries & comparison tables
+│   └── __init__.py
 │
-└── __init__.py             # Clean public API exports
+└── __init__.py
 ```
 
 ## 3. Module Breakdown & Current State
 
 ### `src/core/`
-* **`asset.py`**: `Asset` dataclass. Holds `ticker`, `price_data` (pd.Series), `point_value`, `commission_rate`, `slippage_rate`. Includes `__post_init__` validation.
-* **`capital.py`**: `Capital` dataclass (`initial_capital`, `risk_free_rate`, `capital_model`, `position_sizer`). Contains `BaseCapitalModel` (ABC) and `FixedCapitalModel`. 
-  * *Note: `CompoundingCapitalModel` was intentionally removed from the vectorized engine because vectorized engines cannot honestly calculate iterative dynamic position sizing.*
-* **`sizers.py`**: `BasePositionSizer` (ABC) and `FixedFractionSizer`. Translates raw strategy signals into actual contract sizes based on `Capital` and `Asset`.
-* **`models.py`**: Pure dataclasses. 
-  * `BacktestResult`: **All fields are mandatory** (no `Optional`). Includes `equity`, `positions`, `daily_pnl`, `metrics`, `drawdown`, `returns`, `realized_vol`, `leverage`, `cumulative_fees`, `cumulative_turnover`, and the `asset` object itself.
-  * `PortfolioResult`: Holds portfolio-level series and metrics.
+- **`asset.py`** — `Asset` dataclass: `ticker`, `price_data` (pd.Series), `point_value`, `commission_rate` / `commission_per_contract`, `slippage_rate`, `trading_days`. `__post_init__` validates non-empty data and mutual exclusivity of the two commission modes.
+- **`capital.py`** — `BaseCapitalModel` (ABC) with `calculate_returns`, `calculate_total_return`, `calculate_cagr`, `calculate_drawdown`, `calculate_leverage`. `FixedCapitalModel` implements them using `initial_capital` as the constant denominator (Carver fixed-capital, non-compounding). `Capital` dataclass bundles `initial_capital`, `risk_free_rate`, `capital_model`.
+- **`sizers.py`** — `BasePositionSizer` (ABC) plus:
+  - `FixedFractionSizer` — fixed % of capital per unit of signal.
+  - `FixedContractsSizer` — constant contract count (true buy & hold).
+  - `FixedRiskSizer` — Carver volatility targeting (`contracts = capital × risk / (price × point_value × annualized_vol)`) with a half-Kelly cap (`risk ≤ 0.5 × expected_sharpe`) and ordered position caps (max leverage → margin → max contracts).
+- **`models.py`** — pure dataclasses:
+  - `ExecutionResult` — time series only (equity, daily_pnl, positions, leverage, drawdown, returns, realized_vol, cumulative_fees, cumulative_turnover, asset). All fields mandatory.
+  - `PerformanceMetrics` — aggregate scalars derived from an `ExecutionResult`.
 
 ### `src/engine/`
-* **`vectorized.py`**: `VectorizedEngine`. 
-  * *Responsibility:* **Execution & Accounting only**. Calculates raw PnL, equity curve, transaction costs, and leverage. 
-  * *Does NOT calculate:* Returns, drawdowns, or volatility. It delegates this to the Analyzer.
-* **`analyzer.py`** *(To be finalized tomorrow)*: `PerformanceAnalyzer` class. 
-  * *Responsibility:* **Analytics**. Takes raw execution data and calculates all analytical series (`returns`, `drawdown`, `realized_vol`) and the final scalar `metrics` dictionary. Prevents double-calculation and keeps the engine clean.
+- **`vectorized.py`** — `VectorizedEngine`. *Execution & accounting only.* Computes raw PnL (`pos.shift(1)` avoids signal look-ahead), turnover, costs, equity, and delegates `leverage`/`returns`/`drawdown` to the capital model. Costs are priced at the execution (previous) close, not today's close.
+- **`analyzer.py`** — `PerformanceAnalyzer`. *Stateless.* Constructed with a `Capital`; delegates `total_return`/`cagr`/`initial_capital`/`risk_free_rate` to it, then computes the remaining scalar metrics.
+- **`portfolio.py`** — `PortfolioExecutionResult` (adds weights, correlation, diversification metrics) and `Portfolio` (combines results; deduplicates duplicate `strategy_name`).
+- **`runner.py`** — `BacktestRunner` / `BacktestReport` facade wiring Engine + Analyzer + Plotter.
 
 ### `src/strategies/`
-* **`base.py`**: `BaseStrategy`. Method renamed from `generate_positions` to `generate_signals()`. Strategies are "dumb" about money; they only output raw directional signals (e.g., -1.0 to 1.0).
-* **`buy_and_hold.py`**: Simple baseline strategy outputting a constant `1.0` signal.
+- **`base.py`** — `BaseStrategy.generate_signals()`: strategies are money-agnostic and output raw signals in [-1, 1].
+- **`buy_and_hold.py`**, **`ma_crossover.py`**, **`ewmac.py`** — concrete strategies.
 
 ### `src/data/`
-* **`loader.py`**: `load_simple_price_csv()`. Reads 2-column CSVs (date, price) and returns a pure `pd.Series` with a `DatetimeIndex`. No assumptions about column names.
+- **`loader.py`** — `load_simple_price_csv()`: 2-column CSV (date, price) → `pd.Series` with a `DatetimeIndex`.
 
-### `src/plots/`
-* **`plotter.py`**: Modular Panel Registry pattern. 
-  * *Responsibility:* **Dumb drawing**. It does not calculate math. It receives pre-calculated series from `BacktestResult` and dispatches them to specific renderer functions (`_render_equity`, `_render_drawdown`, etc.).
+### `src/visualization/`
+- **`plotter.py`** — panel-registry renderers; reads pre-computed series, does no math.
+- **`reporter.py`** — `print_summary`, `print_comparison_table`, `print_report_comparison`, `print_portfolio_comparison`, `print_portfolio_diversification`.
 
-## 4. Key Architectural Decisions Made Today
-1. **Signal vs. Position:** Strategies output *signals*. The `PositionSizer` bridges the signal to the `Capital` to output *positions*. This allows the same strategy to be tested with different account sizes without changing the strategy code.
-2. **Mathematical Honesty:** Removed compounding from the vectorized engine. Vectorized engines are for Fixed Capital signal testing. Compounding belongs in the Event-Driven engine (backtrader).
-3. **Single Source of Truth for Math:** The `PerformanceAnalyzer` calculates returns/drawdowns/volatility *once*. The Engine doesn't calculate them, and the Plotter doesn't calculate them. This ensures the plotted drawdown perfectly matches the `max_drawdown` metric in the dictionary.
-4. **Strict Contracts:** `BacktestResult` fields are mandatory. The Engine *must* provide them (even if they are zero), eliminating `if x is not None` checks downstream.
+## 4. Key Architectural Decisions
 
-## 5. Next Steps for Tomorrow
+1. **Signal vs. Position:** strategies output *signals*; sizers bridge signal → capital → *positions*. The same strategy is testable across account sizes.
+2. **Fixed-capital model (Carver "Advanced Futures Trading Strategies"):** all per-period math uses `initial_capital` as the denominator; no compounding in the vectorized engine (compounding belongs in an event-driven engine).
+3. **Single source of truth for math:** the capital model computes `returns`/`drawdown`/`leverage`/`total_return`/`cagr`; the analyzer and engine delegate to it rather than re-implementing.
+4. **Strict contracts:** `ExecutionResult` fields are mandatory; downstream code has no `if x is not None` checks.
+5. **No look-ahead:** `pos.shift(1)` for signals, and costs priced at the execution close.
 
-### Immediate Code Tasks
-- [ ] **Finalize `src/engine/analyzer.py`**: Implement the `PerformanceAnalyzer` class with `_calculate_series()` and `_calculate_metrics_dict()` methods.
-- [ ] **Update `src/engine/vectorized.py`**: Refactor the `run()` method to use the new `PerformanceAnalyzer` instead of calculating metrics inline.
-- [ ] **Finalize `src/plots/plotter.py`**: Ensure the `prepare_plot_data` function simply reads the pre-calculated series from `BacktestResult` without doing any math.
-- [ ] **Create `scripts/test_architecture.py`**: Write a "Hello World" script using mock data to prove the full pipeline (Data -> Strategy -> Sizer -> Engine -> Analyzer -> Plotter) works end-to-end.
+## 5. Recently Fixed (audit pass)
 
-### Integration Tasks (Later)
-- [ ] Connect the new `VectorizedEngine` to the existing `BacktestService` orchestration layer.
-- [ ] Update `ResultStorage` to handle the new `BacktestResult` format when saving to the VPS PostgreSQL database.
-- [ ] Re-implement `SMA Crossover` and `MA Crossover` strategies using the new `generate_signals()` framework.
+- Short-position leverage was clipped to 0 → now gross leverage `|notional| / initial_capital`.
+- Analyzer implicitly hardcoded fixed-capital math → now injected with `Capital` and delegates.
+- `print_portfolio_comparison` referenced non-existent `res.metrics` → now accepts `PerformanceMetrics`.
+- `Portfolio` silently dropped duplicate `strategy_name` → now deduplicates list input.
+- Commission/slippage priced one bar late → now priced at the execution close.
+- Day-0 fees/turnover dropped by `.diff().fillna(0)` → now preserved.
+- `FixedRiskSizer` mixed risk-target units with leverage-ratio constraints → now pure vol-targeting + half-Kelly cap.
 
-***
+## 6. Notes / Conventions
 
-**Rest up! You made massive progress today. The architecture is now incredibly clean, professional, and mathematically sound. See you tomorrow!**
+- `point_value=1.0` in the notebooks models futures as units/CFDs (no margin or contract multiplier).
+- `commission_rate` is interpreted as a fraction of traded notional.
+- Data lives in `data/*.csv` (USDRUB, GLDRUB_TOM, MCFTR, RGBITR, RGBITR1Y, CNYRUB_TOM).
+- Full usage examples live in `my_tests/*.ipynb` and `test.ipynb`.

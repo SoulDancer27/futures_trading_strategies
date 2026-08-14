@@ -34,6 +34,7 @@ class PerformanceMetrics:
     Aggregate scalar statistics derived from an ExecutionResult.
     """
     total_return_pct: float
+    gross_return_pct: float
     cagr_pct: float
     annual_volatility_pct: float
     sharpe_ratio: float

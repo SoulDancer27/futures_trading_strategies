@@ -46,7 +46,7 @@ class BacktestRunner:
         self.capital = capital
         self.asset = asset
         self.engine = VectorizedEngine(capital=capital, position_sizer=sizer)
-        self.analyzer = PerformanceAnalyzer()
+        self.analyzer = PerformanceAnalyzer(capital)
 
     def run(self, strategy) -> BacktestReport:
         """Run a single strategy and return a BacktestReport."""

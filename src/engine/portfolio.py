@@ -34,9 +34,16 @@ class Portfolio(PortfolioExecutionResult):
         results: Union[List[ExecutionResult], Dict[str, ExecutionResult]], 
         weights: Optional[Union[Dict[str, float], List[float]]] = None
     ):
-        # 1. Normalize input to a dictionary
+        # 1. Normalize input to a dictionary (deduplicate names for list input)
         if isinstance(results, list):
-            res_dict = {r.strategy_name: r for r in results}
+            res_dict = {}
+            for i, r in enumerate(results):
+                base = r.strategy_name or f"Strategy {i + 1}"
+                name, n = base, 2
+                while name in res_dict:
+                    name = f"{base} ({n})"
+                    n += 1
+                res_dict[name] = r
         else:
             res_dict = results
             

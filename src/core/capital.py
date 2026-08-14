@@ -23,7 +23,9 @@ class FixedCapitalModel(BaseCapitalModel):
         drawdown = (equity - equity.cummax()) / initial_capital
         return drawdown.clip(lower=-1.0)
     def calculate_leverage(self, notional, equity, initial_capital):
-        return (notional / initial_capital).fillna(0).clip(lower=0)
+        # Gross leverage vs FIXED initial capital (Carver fixed-capital model).
+        # abs() fixes short positions being clipped to 0.
+        return (notional.abs() / initial_capital).fillna(0)
 
 @dataclass
 class Capital:
