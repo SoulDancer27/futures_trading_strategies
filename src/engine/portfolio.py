@@ -51,8 +51,15 @@ class Portfolio(PortfolioExecutionResult):
         if len(names) < 1:
             raise ValueError("Portfolio requires at least 1 strategy.")
 
-        # 2. Align Equity and Returns
-        equity_df = pd.DataFrame({name: res_dict[name].equity for name in names}).ffill().dropna()
+        # 2. Align on a unified business-day calendar over the common date range.
+        #    Each series is reindexed to the calendar; missing days are
+        #    forward-filled (equity/positions/fees carry over) or zeroed
+        #    (no return on a day the asset didn't trade).
+        common_start = max(res_dict[name].equity.index.min() for name in names)
+        common_end = min(res_dict[name].equity.index.max() for name in names)
+        calendar = pd.bdate_range(common_start, common_end)
+
+        equity_df = pd.DataFrame({name: res_dict[name].equity for name in names}).reindex(calendar).ffill().dropna()
         returns_df = pd.DataFrame({name: res_dict[name].returns for name in names}).reindex(equity_df.index).fillna(0)
         
         # 3. Calculate Weights
@@ -73,20 +80,22 @@ class Portfolio(PortfolioExecutionResult):
 
         # 4. Calculate Portfolio Series
         port_returns = (returns_df * w).sum(axis=1)
-        initial_cap = equity_df.iloc[0, 0]
+        # Initial capital: equity starts flat at capital (first daily PnL is 0),
+        # so the first equity value of any strategy equals the initial capital.
+        initial_cap = res_dict[names[0]].equity.iloc[0]
         port_daily_pnl = port_returns * initial_cap
         port_equity = initial_cap + port_daily_pnl.cumsum()
         drawdown = ((port_equity - port_equity.cummax()) / initial_cap * 100)
         
         # Leverage (Weighted average of individual leverages)
-        leverage_df = pd.DataFrame({name: res_dict[name].leverage for name in names}).reindex(port_equity.index).fillna(0)
+        leverage_df = pd.DataFrame({name: res_dict[name].leverage for name in names}).reindex(port_equity.index).ffill().fillna(0)
         port_leverage = (leverage_df * w).sum(axis=1)
 
         # 5. Aggregate REAL Fees and Turnover (Weighted sum)
-        fees_df = pd.DataFrame({name: res_dict[name].cumulative_fees for name in names}).reindex(port_equity.index).fillna(0)
+        fees_df = pd.DataFrame({name: res_dict[name].cumulative_fees for name in names}).reindex(port_equity.index).ffill().fillna(0)
         port_cumulative_fees = (fees_df * w).sum(axis=1)
 
-        turnover_df = pd.DataFrame({name: res_dict[name].cumulative_turnover for name in names}).reindex(port_equity.index).fillna(0)
+        turnover_df = pd.DataFrame({name: res_dict[name].cumulative_turnover for name in names}).reindex(port_equity.index).ffill().fillna(0)
         port_cumulative_turnover = (turnover_df * w).sum(axis=1)
 
         # 6. Create Composite Price Index from REAL asset prices

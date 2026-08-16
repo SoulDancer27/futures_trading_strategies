@@ -59,3 +59,21 @@ class PerformanceMetrics:
     total_turnover: float
     total_fee_drag_pct: float
     annualized_fee_drag_pct: float
+    num_years: float
+
+
+@dataclass
+class RegressionResult:
+    """
+    Single-factor benchmark regression (Jensen-style alpha/beta).
+    Strategy monthly returns regressed on benchmark monthly returns.
+    """
+    strategy_name: str
+    benchmark_name: str
+    alpha_monthly_pct: float
+    alpha_annualized_pct: float
+    beta: float
+    r_squared: float
+    alpha_t_stat: float
+    beta_t_stat: float
+    n_observations: int

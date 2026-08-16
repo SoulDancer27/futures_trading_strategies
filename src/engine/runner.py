@@ -9,6 +9,7 @@ from ..core.sizers import BasePositionSizer
 from ..core.models import ExecutionResult, PerformanceMetrics
 from .vectorized import VectorizedEngine
 from .analyzer import PerformanceAnalyzer
+from .portfolio import Portfolio
 from ..visualization import plot_backtest_results, print_summary
 
 
@@ -60,3 +61,35 @@ class BacktestRunner:
         for name, strategy in strategies.items():
             reports[name] = self.run(strategy)
         return reports
+
+
+class PortfolioRunner:
+    """
+    Facade for building and analyzing a portfolio of individual strategy results.
+    Mirrors BacktestRunner: returns a BacktestReport with the same convenience API
+    (`.metrics`, `.print_summary()`, `.plot()`).
+    """
+
+    def __init__(self, capital: Capital, analyzer: Optional[PerformanceAnalyzer] = None):
+        self.capital = capital
+        self.analyzer = analyzer or PerformanceAnalyzer(capital)
+
+    def run(
+        self,
+        results: Union[List[ExecutionResult], Dict[str, ExecutionResult]],
+        weights: Optional[Union[Dict[str, float], List[float]]] = None,
+    ) -> BacktestReport:
+        """
+        Build a Portfolio from individual results and return a BacktestReport.
+
+        Accepts either ExecutionResult objects or BacktestReport objects
+        (list or dict); BacktestReport inputs are unwrapped to their `.result`.
+        """
+        if isinstance(results, dict):
+            results = {name: (r.result if isinstance(r, BacktestReport) else r) for name, r in results.items()}
+        else:
+            results = [r.result if isinstance(r, BacktestReport) else r for r in results]
+
+        portfolio = Portfolio(results, weights)
+        metrics = self.analyzer.analyze(portfolio)
+        return BacktestReport(portfolio, metrics)

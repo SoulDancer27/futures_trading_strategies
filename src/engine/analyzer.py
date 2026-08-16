@@ -32,7 +32,9 @@ class PerformanceAnalyzer:
         initial_capital = self.capital.initial_capital
         risk_free_rate = self.capital.risk_free_rate
         trading_days = result.asset.trading_days
-        n_years = len(equity) / trading_days
+        # Years measured by calendar elapsed time (robust to how many rows
+        # survived alignment), rather than row count / trading days.
+        n_years = (equity.index[-1] - equity.index[0]).days / 365.25
         
         # --- Core Metrics (delegated to the capital model) ---
         total_return = capital_model.calculate_total_return(returns)
@@ -110,7 +112,8 @@ class PerformanceAnalyzer:
             avg_daily_turnover=avg_daily_turnover,
             total_turnover=daily_turnover.sum(),
             total_fee_drag_pct=(total_fees / initial_capital) * 100,
-            annualized_fee_drag_pct=((total_fees / initial_capital) * 100 / n_years) if n_years > 0 else 0.0
+            annualized_fee_drag_pct=((total_fees / initial_capital) * 100 / n_years) if n_years > 0 else 0.0,
+            num_years=n_years,
         )
 
     def _calculate_avg_drawdown(self, drawdown_series: pd.Series) -> float:

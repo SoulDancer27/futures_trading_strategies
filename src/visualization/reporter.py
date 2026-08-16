@@ -3,18 +3,38 @@ Modular Reporting Module for Backtest Results.
 Handles console printing of summaries, comparison tables, and portfolio analysis.
 Strictly "dumb": reads pre-calculated metrics from PerformanceMetrics dataclass.
 """
+from __future__ import annotations
+
 import pandas as pd
 import numpy as np
-from typing import List, Tuple, Union, Dict, Any, Optional
+from typing import TYPE_CHECKING, List, Tuple, Union, Dict, Any, Optional
 
-from ..core.models import PerformanceMetrics
-from ..engine.portfolio import PortfolioExecutionResult
+from ..core.models import PerformanceMetrics, RegressionResult
+
+if TYPE_CHECKING:
+    from ..engine.portfolio import PortfolioExecutionResult
+    from ..engine.runner import BacktestReport
+
+MetricsInput = Union[
+    PerformanceMetrics,
+    List[PerformanceMetrics],
+    Dict[str, PerformanceMetrics],
+]
+
+ReportInput = Union[
+    "BacktestReport",
+    List["BacktestReport"],
+    Dict[str, "BacktestReport"],
+]
 
 
 # ==========================================
 # 1. METADATA & FORMATTING RULES
 # ==========================================
 METRIC_CATEGORIES = {
+    "📅 Period": [
+        "num_years",
+    ],
     " Returns & Performance": [
         "total_return_pct", "cagr_pct", "gross_return_pct",
     ],
@@ -58,6 +78,7 @@ METRIC_FORMATTERS = {
     "sortino_ratio": lambda v: f"{v:.2f}",  # <-- ADDED
     "skew": lambda v: f"{v:.2f}",           # <-- ADDED
     "kurtosis": lambda v: f"{v:.2f}",       # <-- ADDED
+    "num_years": lambda v: f"{v:.2f}",
 }
 
 METRIC_LABELS = {
@@ -88,6 +109,7 @@ METRIC_LABELS = {
     "gross_pnl": "Gross Pnl",
     "net_pnl": "Net Pnl",
     "gross_return": "Gross Return",
+    "num_years": "Years",
 }
 
 
@@ -122,6 +144,9 @@ def print_summary(strategy_name: str, metrics: PerformanceMetrics) -> None:
     print(f"  STRATEGY SUMMARY: {strategy_name}")
     print("═" * 60)
     
+    # Period
+    print(f"  Years:             {metrics.num_years:.2f}")
+    
     # Returns
     print(f"  Total Return:      {metrics.total_return_pct:+.2f}%")
     print(f"  CAGR:              {metrics.cagr_pct:+.2f}%")
@@ -149,9 +174,39 @@ def print_summary(strategy_name: str, metrics: PerformanceMetrics) -> None:
 # ==========================================
 # 4. BEAUTIFUL COMPARISON TABLE
 # ==========================================
+def _normalize_strategies(
+    strategies: MetricsInput,
+) -> List[Tuple[str, PerformanceMetrics]]:
+    """Normalize single / list / dict metrics input into (name, metrics) pairs."""
+    if isinstance(strategies, dict):
+        return list(strategies.items())
+    if isinstance(strategies, list):
+        return [(f"Strategy {i + 1}", metrics) for i, metrics in enumerate(strategies)]
+    return [("Strategy", strategies)]
+
+
+def _normalize_reports(
+    reports: ReportInput,
+) -> List[Tuple[str, "BacktestReport"]]:
+    """Normalize single / list / dict report input into (name, report) pairs."""
+    if isinstance(reports, dict):
+        return list(reports.items())
+    if isinstance(reports, list):
+        return [(r.result.strategy_name or f"Strategy {i + 1}", r) for i, r in enumerate(reports)]
+    return [(reports.result.strategy_name or "Strategy", reports)]
+
+
 def print_comparison_table(
     title: str,
-    strategies: List[Tuple[str, Any]],
+    strategies: MetricsInput,
+) -> None:
+    """Print a comparison table. Accepts a single metrics object, a list, or a dict of name -> metrics."""
+    _render_comparison_table(title, _normalize_strategies(strategies))
+
+
+def _render_comparison_table(
+    title: str,
+    strategies: List[Tuple[str, PerformanceMetrics]],
 ) -> None:
     if not strategies:
         return
@@ -255,13 +310,14 @@ def print_comparison_table(
 
 def print_report_comparison(
     title: str,
-    reports: List[Tuple[str, Any]],
+    reports: ReportInput,
 ) -> None:
     """
     Wrapper that extracts metrics from BacktestReport objects.
+    Accepts a single report, a list of reports, or a dict of name -> report.
     """
-    strategies = [(name, report.metrics) for name, report in reports]
-    print_comparison_table(title, strategies)
+    pairs = [(name, report.metrics) for name, report in _normalize_reports(reports)]
+    _render_comparison_table(title, pairs)
 
 
 # ==========================================
@@ -286,13 +342,29 @@ def print_portfolio_diversification(portfolio_result: PortfolioExecutionResult) 
 
 def print_portfolio_comparison(
     portfolio_metrics: PerformanceMetrics,
-    individual_metrics: List[Tuple[str, PerformanceMetrics]],
+    individual_metrics: MetricsInput,
 ) -> None:
     """
     Compares individual strategies against the portfolio.
     Accepts already-computed PerformanceMetrics (see PerformanceAnalyzer).
+    Accepts a single metrics object, a list, or a dict of name -> metrics.
     """
-    strategies = list(individual_metrics)
-    strategies.append(("PORTFOLIO", portfolio_metrics))
+    pairs = _normalize_strategies(individual_metrics)
+    pairs.append(("PORTFOLIO", portfolio_metrics))
 
-    print_comparison_table("Strategy vs Portfolio Comparison", strategies)
+    _render_comparison_table("Strategy vs Portfolio Comparison", pairs)
+
+
+def print_regression(result: RegressionResult) -> None:
+    """Print an alpha/beta benchmark regression summary."""
+    print("\n" + "═" * 60)
+    print(f"  BENCHMARK REGRESSION: {result.strategy_name} vs {result.benchmark_name}")
+    print("═" * 60)
+    print(f"  Alpha (monthly):     {result.alpha_monthly_pct:+.2f}%")
+    print(f"  Alpha (annualized):  {result.alpha_annualized_pct:+.2f}%")
+    print(f"  Beta:                {result.beta:.3f}")
+    print(f"  R-squared:           {result.r_squared:.3f}")
+    print(f"  Alpha t-stat:        {result.alpha_t_stat:.2f}")
+    print(f"  Beta t-stat:         {result.beta_t_stat:.2f}")
+    print(f"  Observations:        {result.n_observations}")
+    print("═" * 60 + "\n")
