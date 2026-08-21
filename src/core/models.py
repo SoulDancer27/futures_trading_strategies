@@ -77,3 +77,6 @@ class RegressionResult:
     alpha_t_stat: float
     beta_t_stat: float
     n_observations: int
+    # Aligned monthly return series (decimal), used for scatter plotting.
+    strategy_monthly: Optional[pd.Series] = None
+    benchmark_monthly: Optional[pd.Series] = None

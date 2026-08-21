@@ -4,13 +4,14 @@ Uses a Panel Registry pattern for clean, extensible plotting.
 Strictly "dumb": reads pre-calculated series from ExecutionResult.
 """
 import matplotlib.pyplot as plt
+import numpy as np
 import pandas as pd
 from matplotlib.ticker import FuncFormatter
 from pathlib import Path
 from datetime import datetime
 from typing import Union, List, Dict, Optional, Callable, Tuple
 
-from ..core.models import ExecutionResult
+from ..core.models import ExecutionResult, RegressionResult
 
 # ==========================================
 # 1. DATA PREPARATION
@@ -199,3 +200,47 @@ def plot_backtest_results(
     else:
         plt.show()
     plt.close()
+
+
+def plot_regression(result: RegressionResult, ax=None, figsize=(8, 6)):
+    """
+    Scatter the strategy's monthly returns against the benchmark's monthly returns,
+    overlaid with the fitted regression line (y = alpha + beta * x).
+
+    Returns the matplotlib Axes for further customization.
+    """
+    if result.strategy_monthly is None or result.benchmark_monthly is None:
+        raise ValueError(
+            "RegressionResult has no monthly return series; run RegressionAnalyzer.analyze() first."
+        )
+
+    x = result.benchmark_monthly * 100.0
+    y = result.strategy_monthly * 100.0
+
+    if ax is None:
+        _, ax = plt.subplots(figsize=figsize)
+
+    ax.scatter(x, y, s=25, alpha=0.6, edgecolors="none", label="Monthly returns")
+
+    # Fitted line: y% = alpha% + beta * x%
+    xline = np.linspace(x.min(), x.max(), 100)
+    yline = result.alpha_monthly_pct + result.beta * xline
+    ax.plot(
+        xline,
+        yline,
+        color="red",
+        linewidth=2,
+        label=f"Fit: α={result.alpha_monthly_pct:+.2f}%/mo, β={result.beta:.2f}",
+    )
+
+    ax.axhline(0, color="gray", linewidth=0.5, alpha=0.5)
+    ax.axvline(0, color="gray", linewidth=0.5, alpha=0.5)
+    ax.set_xlabel(f"{result.benchmark_name} monthly return (%)")
+    ax.set_ylabel(f"{result.strategy_name} monthly return (%)")
+    ax.set_title(
+        f"Benchmark Regression: {result.strategy_name} vs {result.benchmark_name}\n"
+        f"R²={result.r_squared:.3f}   α t-stat={result.alpha_t_stat:.2f}"
+    )
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+    return ax

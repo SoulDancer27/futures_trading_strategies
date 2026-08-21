@@ -8,6 +8,8 @@ the return you'd get simply by holding the benchmark.
 
 Stateless, and dependency-free: OLS is computed with numpy.
 """
+from typing import Union
+
 import numpy as np
 import pandas as pd
 
@@ -26,11 +28,23 @@ class RegressionAnalyzer:
     def analyze(
         self,
         strategy: ExecutionResult,
-        benchmark: ExecutionResult,
+        benchmark: Union[ExecutionResult, pd.Series],
     ) -> RegressionResult:
-        """Regress the strategy's monthly returns on the benchmark's monthly returns."""
+        """
+        Regress the strategy's monthly returns on the benchmark's monthly returns.
+
+        ``benchmark`` may be either an ``ExecutionResult`` (another strategy) or a raw
+        return series — e.g. ``asset.price_data.pct_change()`` for a pure market benchmark.
+        """
         y = self._monthly_returns(strategy.returns)
-        x = self._monthly_returns(benchmark.returns)
+        strategy_name = strategy.strategy_name or "Strategy"
+
+        if isinstance(benchmark, ExecutionResult):
+            x = self._monthly_returns(benchmark.returns)
+            benchmark_name = benchmark.strategy_name or "Benchmark"
+        else:
+            x = self._monthly_returns(benchmark)
+            benchmark_name = getattr(benchmark, "name", None) or "Benchmark"
 
         # Align on common month-end dates.
         df = pd.concat([y, x], axis=1, join="inner").dropna()
@@ -41,8 +55,8 @@ class RegressionAnalyzer:
 
         alpha_monthly_pct = alpha * 100.0
         return RegressionResult(
-            strategy_name=strategy.strategy_name or "Strategy",
-            benchmark_name=benchmark.strategy_name or "Benchmark",
+            strategy_name=strategy_name,
+            benchmark_name=benchmark_name,
             alpha_monthly_pct=alpha_monthly_pct,
             alpha_annualized_pct=alpha_monthly_pct * self.annualization_factor,
             beta=beta,
@@ -50,6 +64,8 @@ class RegressionAnalyzer:
             alpha_t_stat=t_alpha,
             beta_t_stat=t_beta,
             n_observations=len(df),
+            strategy_monthly=df.iloc[:, 0],
+            benchmark_monthly=df.iloc[:, 1],
         )
 
     @staticmethod
