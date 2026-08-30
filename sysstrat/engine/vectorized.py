@@ -20,14 +20,22 @@ class VectorizedEngine:
         
         price_change = asset.price_data.diff().fillna(0)
         raw_pnl = pos * price_change * asset.point_value
-        turnover = pos.diff().abs().fillna(0)
         
         # Trades that establish today's position execute at the PREVIOUS close
         # (pos is already shifted by 1). Charge costs at that price, not today's
         # close, to avoid a one-bar look-ahead in cost accounting.
         prev_price = asset.price_data.shift(1)
-        commission_cost = turnover * prev_price * (asset.commission_rate or 0.0) * asset.point_value if asset.commission_rate else turnover * (asset.commission_per_contract or 0.0)
-        slippage_cost = turnover * prev_price * (asset.slippage_rate or 0.0) * asset.point_value if asset.slippage_rate else 0.0
+        
+        # Turnover measured in NOTIONAL currency (position change x price x point
+        # value), not in raw contracts.
+        contract_turnover = pos.diff().abs().fillna(0)
+        turnover = (contract_turnover * prev_price * asset.point_value).fillna(0)
+        
+        if asset.commission_rate:
+            commission_cost = turnover * asset.commission_rate
+        else:
+            commission_cost = contract_turnover * (asset.commission_per_contract or 0.0)
+        slippage_cost = turnover * (asset.slippage_rate or 0.0) if asset.slippage_rate else 0.0
         total_costs = (commission_cost + slippage_cost).fillna(0)
         daily_pnl = raw_pnl - total_costs
         equity = self.capital.initial_capital + daily_pnl.cumsum()
@@ -42,5 +50,6 @@ class VectorizedEngine:
             equity=equity, daily_pnl=daily_pnl, positions=pos, leverage=leverage,
             drawdown=drawdown, returns=returns, realized_vol=realized_vol,
             cumulative_fees=total_costs.cumsum(), cumulative_turnover=turnover.cumsum(),
-            strategy_name=strategy.name, asset=asset, risk_free_rate=self.capital.risk_free_rate
+            strategy_name=strategy.name, asset=asset, risk_free_rate=self.capital.risk_free_rate,
+            signal=raw_signal
         )

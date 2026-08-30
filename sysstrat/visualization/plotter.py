@@ -34,6 +34,7 @@ def prepare_plot_data(
             'cumulative_fees': res.cumulative_fees,
             'cumulative_turnover': res.cumulative_turnover,
             'realized_vol': res.realized_vol,
+            'signal': res.signal,
             'price': res.asset.price_data if res.asset else None
         }
         
@@ -79,6 +80,15 @@ def _render_realized_vol(ax, data, names, colors, **kwargs):
     for name, color in zip(names, colors):
         ax.plot(data[name]['realized_vol'].index, data[name]['realized_vol'], label=name, color=color, linewidth=1.5, alpha=0.85)
 
+def _render_signal(ax, data, names, colors, **kwargs):
+    for name, color in zip(names, colors):
+        sig = data[name].get('signal')
+        if sig is not None and len(sig) > 0:
+            ax.plot(sig.index, sig, label=name, color=color, linewidth=1.2, alpha=0.85)
+    ax.axhline(0, color='gray', linestyle='-', linewidth=0.8, alpha=0.6)
+    ax.axhline(1, color='gray', linestyle=':', linewidth=0.5, alpha=0.4)
+    ax.axhline(-1, color='gray', linestyle=':', linewidth=0.5, alpha=0.4)
+
 def _render_cumulative_fees(ax, data, names, colors, **kwargs):
     for name, color in zip(names, colors):
         ax.plot(data[name]['cumulative_fees'].index, data[name]['cumulative_fees'], label=name, color=color, linewidth=1.5, alpha=0.85)
@@ -102,6 +112,7 @@ PANEL_RENDERERS: Dict[str, Callable] = {
     'leverage': _render_leverage,
     'positions': _render_positions,
     'realized_vol': _render_realized_vol,
+    'signal': _render_signal,
     'cumulative_fees': _render_cumulative_fees,
     'cumulative_turnover': _render_cumulative_turnover,
     'price': _render_price
@@ -112,6 +123,7 @@ PANEL_FORMATTERS: Dict[str, Callable] = {
     'positions': lambda y, _: f'{y:.0f}',
     'drawdown': lambda y, _: f'{y:.1f}%',
     'realized_vol': lambda y, _: f'{y:.1f}%',
+    'signal': lambda y, _: f'{y:.1f}',
     'leverage': lambda y, _: f'{y:.2f}x',
     'cumulative_fees': lambda y, _: f'${y:,.0f}',
     'cumulative_turnover': lambda y, _: f'{y:.0f}',

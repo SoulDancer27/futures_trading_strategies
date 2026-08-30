@@ -79,6 +79,8 @@ METRIC_FORMATTERS = {
     "skew": lambda v: f"{v:.2f}",           # <-- ADDED
     "kurtosis": lambda v: f"{v:.2f}",       # <-- ADDED
     "num_years": lambda v: f"{v:.2f}",
+    "total_turnover": lambda v: f"{v:,.0f}",
+    "avg_daily_turnover": lambda v: f"{v:,.2f}",
 }
 
 METRIC_LABELS = {
@@ -98,8 +100,8 @@ METRIC_LABELS = {
     "cost_efficiency": "Cost Efficiency",
     "total_fee_drag_pct": "Total Fee Drag %",
     "annualized_fee_drag_pct": "Annual Fee Drag %",
-    "total_turnover": "Total Turnover",
-    "avg_daily_turnover": "Avg Daily Turnover",
+    "total_turnover": "Total Turnover (notional)",
+    "avg_daily_turnover": "Avg Daily Turnover (notional)",
     "win_rate_pct": "Win Rate %",
     "lower_tail": "Lower Tail Ratio",
     "upper_tail": "Upper Tail Ratio",
@@ -331,6 +333,7 @@ def print_portfolio_diversification(portfolio_result: PortfolioExecutionResult) 
     
     print(f"\n  Diversification Ratio:    {portfolio_result.diversification_ratio:>8.2f}")
     print(f"  Volatility Reduction:     {portfolio_result.volatility_reduction_pct:>7.1f}%")
+    print(f"  Expected Risk (ann.):     {portfolio_result.expected_risk_pct:>7.1f}%")
     
     print("\n  Correlation Matrix:")
     print("─" * 60)

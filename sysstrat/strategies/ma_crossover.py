@@ -50,3 +50,11 @@ class MACrossoverStrategy(BaseStrategy):
         signal.iloc[:min_warmup] = 0.0
         
         return signal.fillna(0.0)
+
+    def get_parameters(self) -> dict:
+        return {
+            "short_window": self.short_window,
+            "long_window": self.long_window,
+            "ma_type": self.ma_type,
+            "mode": self.mode,
+        }

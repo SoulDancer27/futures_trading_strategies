@@ -81,8 +81,13 @@ class PerformanceAnalyzer:
         gross_sharpe = gross_cagr / gross_vol if gross_vol > 0 else 0.0
         
         sharpe_drag = gross_sharpe - sharpe
-        avg_daily_turnover = daily_turnover.mean()
-        turnover_penalty = avg_daily_turnover * 0.1
+        avg_daily_turnover = daily_turnover.mean()  # currency / day
+        # Turnover cost drag: annualized turnover (as a fraction of capital) times
+        # the per-trade cost rate (commission + slippage). Unit-free, and only
+        # meaningful now that turnover is measured in notional currency.
+        cost_rate = (result.asset.commission_rate or 0.0) + (result.asset.slippage_rate or 0.0)
+        annual_turnover_fraction = (daily_turnover.sum() / initial_capital / n_years) if n_years > 0 else 0.0
+        turnover_penalty = annual_turnover_fraction * cost_rate
         turnover_adjusted_sharpe = max(0.0, sharpe - turnover_penalty)
         
         # --- Assemble PerformanceMetrics ---

@@ -15,7 +15,7 @@ A living snapshot of the backtesting framework's architecture and current state.
 ## 2. Directory Structure
 
 ```text
-src/
+sysstrat/
 ├── core/                   # Data structures, capital model, and math
 │   ├── asset.py            # Asset dataclass
 │   ├── capital.py          # BaseCapitalModel (ABC) + FixedCapitalModel + Capital
@@ -27,14 +27,22 @@ src/
 │   ├── vectorized.py       # VectorizedEngine (execution & accounting)
 │   ├── analyzer.py         # PerformanceAnalyzer (analytics & metrics)
 │   ├── portfolio.py        # Portfolio, PortfolioExecutionResult
+│   ├── regression.py       # RegressionAnalyzer (benchmark alpha/beta)
 │   ├── runner.py           # BacktestRunner, BacktestReport (facade)
 │   └── __init__.py
 │
 ├── strategies/             # Strategy implementations (signal generators)
 │   ├── base.py             # BaseStrategy (generate_signals)
+│   ├── transforms.py       # Shared signal transforms (scaling, etc.)
 │   ├── buy_and_hold.py     # BuyAndHoldStrategy
 │   ├── ma_crossover.py     # MACrossoverStrategy (sma/ema, long_only/long_short)
 │   ├── ewmac.py            # EWMACStrategy (trend strength)
+│   ├── normalised_trend.py # NormalisedTrendStrategy
+│   ├── breakout.py         # BreakoutStrategy
+│   ├── acceleration.py     # AccelerationStrategy
+│   ├── skew.py             # SkewStrategy
+│   ├── mean_reversion.py   # MeanReversionStrategy
+│   ├── combined_forecast.py# CombinedForecastStrategy + FDM
 │   └── __init__.py
 │
 ├── data/                   # Data loading
@@ -51,7 +59,7 @@ src/
 
 ## 3. Module Breakdown & Current State
 
-### `src/core/`
+### `sysstrat/core/`
 - **`asset.py`** — `Asset` dataclass: `ticker`, `price_data` (pd.Series), `point_value`, `commission_rate` / `commission_per_contract`, `slippage_rate`, `trading_days`. `__post_init__` validates non-empty data and mutual exclusivity of the two commission modes.
 - **`capital.py`** — `BaseCapitalModel` (ABC) with `calculate_returns`, `calculate_total_return`, `calculate_cagr`, `calculate_drawdown`, `calculate_leverage`. `FixedCapitalModel` implements them using `initial_capital` as the constant denominator (Carver fixed-capital, non-compounding). `Capital` dataclass bundles `initial_capital`, `risk_free_rate`, `capital_model`.
 - **`sizers.py`** — `BasePositionSizer` (ABC) plus:
@@ -62,20 +70,23 @@ src/
   - `ExecutionResult` — time series only (equity, daily_pnl, positions, leverage, drawdown, returns, realized_vol, cumulative_fees, cumulative_turnover, asset). All fields mandatory.
   - `PerformanceMetrics` — aggregate scalars derived from an `ExecutionResult`.
 
-### `src/engine/`
+### `sysstrat/engine/`
 - **`vectorized.py`** — `VectorizedEngine`. *Execution & accounting only.* Computes raw PnL (`pos.shift(1)` avoids signal look-ahead), turnover, costs, equity, and delegates `leverage`/`returns`/`drawdown` to the capital model. Costs are priced at the execution (previous) close, not today's close.
 - **`analyzer.py`** — `PerformanceAnalyzer`. *Stateless.* Constructed with a `Capital`; delegates `total_return`/`cagr`/`initial_capital`/`risk_free_rate` to it, then computes the remaining scalar metrics.
 - **`portfolio.py`** — `PortfolioExecutionResult` (adds weights, correlation, diversification metrics) and `Portfolio` (combines results; deduplicates duplicate `strategy_name`).
+- **`regression.py`** — `RegressionAnalyzer` — benchmark regression (alpha/beta) against a market return series.
 - **`runner.py`** — `BacktestRunner` / `BacktestReport` facade wiring Engine + Analyzer + Plotter.
 
-### `src/strategies/`
+### `sysstrat/strategies/`
 - **`base.py`** — `BaseStrategy.generate_signals()`: strategies are money-agnostic and output raw signals in [-1, 1].
-- **`buy_and_hold.py`**, **`ma_crossover.py`**, **`ewmac.py`** — concrete strategies.
+- **`transforms.py`** — shared signal transforms (forecast scaling, etc.).
+- **`buy_and_hold.py`**, **`ma_crossover.py`**, **`ewmac.py`**, **`normalised_trend.py`**, **`breakout.py`**, **`acceleration.py`**, **`skew.py`**, **`mean_reversion.py`** — concrete strategies.
+- **`combined_forecast.py`** — `CombinedForecastStrategy` and `forecast_diversification_multiplier`.
 
-### `src/data/`
+### `sysstrat/data/`
 - **`loader.py`** — `load_simple_price_csv()`: 2-column CSV (date, price) → `pd.Series` with a `DatetimeIndex`.
 
-### `src/visualization/`
+### `sysstrat/visualization/`
 - **`plotter.py`** — panel-registry renderers; reads pre-computed series, does no math.
 - **`reporter.py`** — `print_summary`, `print_comparison_table`, `print_report_comparison`, `print_portfolio_comparison`, `print_portfolio_diversification`.
 

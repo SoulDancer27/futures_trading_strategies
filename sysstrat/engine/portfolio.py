@@ -20,6 +20,7 @@ class PortfolioExecutionResult(ExecutionResult):
     correlation_matrix: pd.DataFrame = None
     diversification_ratio: float = 0.0
     volatility_reduction_pct: float = 0.0
+    expected_risk_pct: float = 0.0
 
 
 
@@ -114,18 +115,26 @@ class Portfolio(PortfolioExecutionResult):
             composite_price = None
 
         # 7. Calculate Diversification Metrics
+        trading_days = res_dict[names[0]].asset.trading_days
         if len(names) == 1:
             corr_matrix = pd.DataFrame([[1.0]], columns=names, index=names)
             div_ratio = 1.0
             vol_reduction = 0.0
+            expected_risk_pct = float(returns_df.std() * np.sqrt(trading_days)) * 100
         else:
             corr_matrix = returns_df.corr()
-            ind_vols = returns_df.std() * np.sqrt(res_dict[names[0]].asset.trading_days)
-            port_vol = port_returns.std() * np.sqrt(res_dict[names[0]].asset.trading_days)
+            ind_vols = returns_df.std() * np.sqrt(trading_days)
+            port_vol = port_returns.std() * np.sqrt(trading_days)
             weighted_sum_vols = np.sum(w * ind_vols.values)
             
             div_ratio = weighted_sum_vols / port_vol if port_vol > 0 else 1.0
             vol_reduction = (1 - port_vol / weighted_sum_vols) * 100 if weighted_sum_vols > 0 else 0.0
+
+            # Expected portfolio risk: sqrt(w^T Sigma w), annualised. The covariance
+            # matrix is built from per-instrument vol and correlations; with fixed
+            # weights this equals realised vol (it is the ex-ante risk measure).
+            cov = np.outer(ind_vols.values, ind_vols.values) * corr_matrix.values
+            expected_risk_pct = float(np.sqrt(w @ cov @ w)) * 100
 
         # 8. Create Dummy Asset for Compatibility
         dummy_asset = Asset(
@@ -152,5 +161,6 @@ class Portfolio(PortfolioExecutionResult):
             weights=w,
             correlation_matrix=corr_matrix,
             diversification_ratio=div_ratio,
-            volatility_reduction_pct=vol_reduction
+            volatility_reduction_pct=vol_reduction,
+            expected_risk_pct=expected_risk_pct
         )

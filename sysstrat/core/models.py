@@ -27,6 +27,7 @@ class ExecutionResult:
     asset: Asset 
     strategy_name: str = ""                                            
     risk_free_rate: float = 0.0             
+    signal: Optional[pd.Series] = None       # Raw strategy forecast (pre-sizing)
 
 @dataclass
 class PerformanceMetrics:

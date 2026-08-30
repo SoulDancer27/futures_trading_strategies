@@ -1,12 +1,12 @@
 # Python bytecode & cache
-# __pycache__/
+__pycache__/
 *.py[cod]
 *$py.class
 
 # Compiled extensions
 *.so
-# 
-# Distribution/packaging
+
+# Distribution / packaging
 dist/
 build/
 *.egg-info/
@@ -18,7 +18,7 @@ venv/
 env/
 ENV/
 
-# IDE/Editor files
+# IDE / editor files
 .vscode/
 .idea/
 *.swp
@@ -26,4 +26,14 @@ ENV/
 *~
 .DS_Store
 
-/outputs/*
+# Jupyter notebooks
+.ipynb_checkpoints/
+
+# Backups
+*.bak
+
+# Private market data (remove this line if you want to redistribute the CSVs)
+data/
+
+# Outputs
+/outputs/

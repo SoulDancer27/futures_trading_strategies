@@ -126,21 +126,26 @@ class FixedRiskSizer(BasePositionSizer):
 
         # 3. Base position via volatility targeting (Carver):
         #    contracts = (capital * risk) / (price * point_value * annualized_vol)
-        raw_contracts = (capital.initial_capital * effective_risk) / (multiplier * price * vol)
+        base_contracts = (capital.initial_capital * effective_risk) / (multiplier * price * vol)
 
-        # 4. Position caps (clip upper), applied in order.
+        # 4. Round the base size and enforce the minimum-contract floor.
+        base_contracts = base_contracts.round(0).clip(lower=self.min_contracts)
+
+        # 5. Apply the signal (direction + magnitude) -> signed position.
+        position = base_contracts * signal
+
+        # 6. Position caps, applied to the FINAL signed position (so max_leverage
+        #    bounds the actual position, not just the volatility-targeted size).
         if self.max_leverage is not None and self.max_leverage > 0:
-            max_notional = capital.initial_capital * self.max_leverage
-            raw_contracts = raw_contracts.clip(upper=max_notional / (price * multiplier))
+            cap_contracts = (capital.initial_capital * self.max_leverage) / (price * multiplier)
+            position = position.clip(lower=-cap_contracts, upper=cap_contracts)
 
         if self.margin_per_contract is not None and self.margin_per_contract > 0:
-            raw_contracts = raw_contracts.clip(upper=capital.initial_capital / self.margin_per_contract)
+            margin_contracts = capital.initial_capital / self.margin_per_contract
+            position = position.clip(lower=-margin_contracts, upper=margin_contracts)
 
         if self.max_contracts is not None:
-            raw_contracts = raw_contracts.clip(upper=self.max_contracts)
+            position = position.clip(lower=-self.max_contracts, upper=self.max_contracts)
 
-        # 5. Round, apply min, and flatten where vol was unknown (NaN -> 0).
-        final_contracts = raw_contracts.round(0).clip(lower=self.min_contracts)
-
-        # 6. Direction (signal) and fill any remaining NaN (warm-up).
-        return (final_contracts * signal).fillna(0)
+        # 7. Flatten where vol was unknown (NaN -> 0, i.e. warm-up).
+        return position.fillna(0)
